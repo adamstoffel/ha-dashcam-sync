@@ -45,7 +45,9 @@ def validate(text: str) -> list[str]:
         for step in STEPS:
             value = row.get(step, "")
             if value not in OK:
-                problems.append(f"{row.get('camera', '?')} ({row.get('driver')}, {row.get('arch')}): {step} = {value or 'missing'}")
+                problems.append(
+                    f"{row.get('camera', '?')} ({row.get('driver')}, {row.get('arch')}): {step} = {value or 'missing'}"
+                )
     covered = {(r.get("driver"), r.get("arch")) for r in rows}
     for driver in STABLE_DRIVERS:
         for arch in ARCHES:

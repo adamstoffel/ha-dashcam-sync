@@ -409,6 +409,7 @@ class Daemon:
             owner = self.workers.get(camera)
             if owner is not None:
                 owner.status.last_event_clip = clip.start.isoformat()
+                owner.publish_status()  # subscribers must see it, not only pollers
         await asyncio.to_thread(self._ship_safely)
 
     def _ship_safely(self) -> None:
@@ -515,6 +516,8 @@ class Daemon:
         cam = self.options.camera(camera_id)
         if cam is None:
             raise ConfigError(f"unknown camera {camera_id}")
+        if cam.connection != "hotspot":
+            raise ConfigError("the address-block check only applies to hotspot cameras")
         if known_device_ips is not None:
             self.known_device_ips = known_device_ips
         block = self.block_for(cam)

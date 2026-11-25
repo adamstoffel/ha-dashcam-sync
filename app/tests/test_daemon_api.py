@@ -715,3 +715,9 @@ async def test_connected_websockets_do_not_delay_shutdown(
             aiohttp.WSMsgType.CLOSING,
             aiohttp.WSMsgType.CLOSED,
         )
+
+
+async def test_overlap_check_is_refused_for_lan_cameras(stack: Stack) -> None:
+    status, body = await stack.post("/api/v1/cameras/car/overlap", {})
+    assert status == 400 and "hotspot" in body["error"]
+    assert (await stack.get("/api/v1/cameras/car/overlap"))[0] == 400

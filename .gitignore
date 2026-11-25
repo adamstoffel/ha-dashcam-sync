@@ -11,3 +11,5 @@ build/
 dist/
 /data/
 .dev-data/
+/ui-screens/
+node_modules/

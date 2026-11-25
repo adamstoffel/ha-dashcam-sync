@@ -514,7 +514,7 @@ async def test_arrival_hint_polls_faster(env: Env) -> None:
     assert env.worker._poll_interval() == env.ctx.timing.hint_poll
     await asyncio.sleep(0.25)
     assert env.worker._poll_interval() == env.ctx.timing.poll
-    env.worker._publish_status()
+    env.worker.publish_status()
     assert env.worker.status.arrival_hint is False
 
 
@@ -530,3 +530,19 @@ async def test_status_events_are_published(env: Env) -> None:
     assert dt.datetime.fromisoformat(env.worker.status.last_sync or "").tzinfo is not None
     with contextlib.suppress(Exception):
         env.bus.unsubscribe(queue)
+
+
+async def test_last_sync_and_last_event_survive_a_restart(env: Env) -> None:
+    await env.session()
+    original = env.worker.status
+    assert original.last_sync
+    reborn = CameraWorker(env.ctx, env.worker.camera)  # a fresh worker, as after an app restart
+    assert (
+        reborn.status.last_event_clip == "2026-11-22T09:16:00+00:00"
+        or reborn.status.last_event_clip
+    )
+    assert reborn.status.last_event_clip.startswith("2026-11-22")  # type: ignore[union-attr]
+    assert reborn.status.last_sync is not None
+    # A camera that never synced has nothing to restore.
+    other = CameraWorker(env.ctx, env.worker.camera.model_copy(update={"id": "other"}))
+    assert other.status.last_sync is None and other.status.last_event_clip is None

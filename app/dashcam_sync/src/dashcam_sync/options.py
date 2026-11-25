@@ -135,6 +135,8 @@ def parse_options(raw: dict[str, Any]) -> AppOptions:
     validation are reported by :func:`split_cameras` instead of raising.
     """
     cams_raw = raw.get("cameras") or []
+    if not isinstance(cams_raw, list):
+        raise ValueError("cameras must be a list")
     good: list[dict[str, Any]] = []
     for entry in cams_raw:
         try:
@@ -148,7 +150,10 @@ def parse_options(raw: dict[str, Any]) -> AppOptions:
 def invalid_camera_entries(raw: dict[str, Any]) -> dict[str, str]:
     """Map ``id or #index`` to the validation error for entries that failed."""
     problems: dict[str, str] = {}
-    for index, entry in enumerate(raw.get("cameras") or []):
+    cams = raw.get("cameras") or []
+    if not isinstance(cams, list):
+        return {"cameras": "cameras must be a list"}
+    for index, entry in enumerate(cams):
         try:
             CameraOptions.model_validate(entry)
         except ValueError as err:

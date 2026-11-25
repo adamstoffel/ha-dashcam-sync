@@ -89,7 +89,7 @@ async function cameras() {
             <button data-act="sync" ${s?.connected ? "" : "disabled"}>Sync now</button>
             <button data-act="restore">Restore recording</button>
             <button data-act="toggle">${o.enabled ? "Pause" : "Resume"}</button>
-            <button data-act="overlap">Network check</button>
+            ${o.connection === "hotspot" ? '<button data-act="overlap">Network check</button>' : ""}
             <button data-act="profile">Capture device profile</button>
             <button data-act="delete" class="danger">Remove</button>
           </div></div>
@@ -172,10 +172,12 @@ async function clips() {
     <div id="player"></div>
     ${data.length ? "" : `<div class="card muted">No clips yet.</div>`}
     ${data.map((c) => `<div class="card row" data-id="${c.id}">
-      <img class="thumb" loading="lazy" src="api/v1/clips/${c.id}/thumb" alt="" onerror="this.style.visibility='hidden'">
+      ${c.post_status === "done" ? `<img class="thumb" loading="lazy" src="api/v1/clips/${c.id}/thumb" alt="" onerror="this.style.visibility='hidden'">` : `<div class="thumb" role="img" aria-label="Preparing thumbnail"></div>`}
       <div style="flex:1"><b>${esc(c.kind)}</b> · ${esc(c.channel)} · ${when(c.start)}<br><span class="muted">${bytes(c.size)}${c.duration ? " · " + Math.round(c.duration) + " s" : ""} · ${c.copies.map((x) => esc(x.target)).join(", ")}</span></div>
       <div><button data-a="play">Play</button> <button data-a="keep">${c.keep ? "Unkeep" : "Keep"}</button> <button data-a="del" class="danger">Delete</button></div></div>`).join("")}`;
   $("#cam").onchange = (e) => { location.hash = "#clips?camera=" + e.target.value; };
+  // Clips are post-processed in the background: refresh until their thumbnails exist.
+  if (data.some((c) => c.post_status === "pending") && !$("video")) timer = setTimeout(() => { if (view === "clips") clips().catch(() => {}); }, 3000);
   main.querySelectorAll("[data-a]").forEach((b) => {
     b.onclick = async () => {
       const card = b.closest(".card"), id = card.dataset.id;

@@ -214,6 +214,20 @@ class CameraWorker:
         self._synced_this_link = False
         self._remaining_base = 0
         self.status.restore_pending = ctx.flags.get(camera.id) is not None
+        self._restore_persisted_state()
+
+    def _restore_persisted_state(self) -> None:
+        """Last sync and last event clip survive an app restart (they live in the catalogue)."""
+        catalog = self.ctx.catalog
+        newest_event = catalog.latest_clip(self.camera.id, Kind.EVENT)
+        if newest_event is not None:
+            self.status.last_event_clip = newest_event.start.isoformat()
+        for session in catalog.recent_sessions(20, self.camera.id):
+            if session["result"] in ("ok", "partial") and session["ended_ts"]:
+                self.status.last_sync = dt.datetime.fromtimestamp(
+                    session["ended_ts"], tz=dt.UTC
+                ).isoformat()
+                break
 
     # ------------------------------------------------------------ lifecycle
 
@@ -235,7 +249,7 @@ class CameraWorker:
         self.camera = camera
         self.status.name = camera.display_name
         self.status.enabled = camera.enabled
-        self._publish_status()  # sync_mode / enabled changes reach subscribers now
+        self.publish_status()  # sync_mode / enabled changes reach subscribers now
         self._wake.set()
 
     def request_sync(self) -> None:
@@ -253,7 +267,7 @@ class CameraWorker:
 
     # ------------------------------------------------------------- plumbing
 
-    def _publish_status(self) -> None:
+    def publish_status(self) -> None:
         self.status.arrival_hint = self.ctx.now() < self._hint_until
         self.status.sync_mode = self.camera.sync_mode or self.ctx.sync_options().mode
         self.ctx.bus.publish("camera", camera=self.camera.id, status=self.status.as_dict())
@@ -261,7 +275,7 @@ class CameraWorker:
     def _set(self, state: str) -> None:
         if self.status.sync_status != state:
             self.status.sync_status = state
-            self._publish_status()
+            self.publish_status()
 
     async def _sleep(self, seconds: float) -> None:
         """Sleep, but wake early for manual requests and option changes."""
@@ -287,7 +301,7 @@ class CameraWorker:
         blocked = self.ctx.blocked(cam.id)
         if blocked != self.status.blocked_reasons:
             self.status.blocked_reasons = blocked
-            self._publish_status()
+            self.publish_status()
         if not cam.enabled or blocked:
             self._set_connected(False)
             self._manual = False
@@ -332,7 +346,7 @@ class CameraWorker:
         if not connected:
             self._synced_this_link = False
             self.status.sync_status = IDLE if self.status.sync_status != ERROR else ERROR
-        self._publish_status()
+        self.publish_status()
 
     async def _after_session(self, result: SessionStats) -> None:
         if result.result in ("ok", "unsupported", "storage_full", "partial"):
@@ -372,13 +386,13 @@ class CameraWorker:
         except (CameraError, TimeoutError, OSError) as err:
             self.status.restore_pending = True
             self.status.error = f"restore failed: {err}"
-            self._publish_status()
+            self.publish_status()
             raise
         self.ctx.flags.clear(self.camera.id)
         self.status.restore_pending = False
         if self.status.error and self.status.error.startswith("restore failed"):
             self.status.error = None
-        self._publish_status()
+        self.publish_status()
 
     async def _restore_in_finally(self, driver: BaseDriver) -> None:
         """Restore that survives cancellation and swallows camera errors."""
@@ -412,7 +426,7 @@ class CameraWorker:
             )
         except UnsupportedCamera:
             self.status.unsupported = True
-            self._publish_status()
+            self.publish_status()
             raise
         self.status.unsupported = False
         probe = detection.probe
@@ -514,7 +528,7 @@ class CameraWorker:
             >= LIST_FAILURES_BEFORE_REPAIR
         ):
             self.ctx.bus.publish("issue", camera=self.camera.id, key="listing_keeps_failing")
-        self._publish_status()
+        self.publish_status()
 
     # ------------------------------------------------------------ downloads
 
@@ -536,7 +550,7 @@ class CameraWorker:
         self.status.bytes_remaining = self._remaining_base
         self.status.eta_seconds = None
         self._set(DOWNLOADING)
-        self._publish_status()
+        self.publish_status()
 
         failures_in_row = 0
         for rec, row in pending:
@@ -563,7 +577,7 @@ class CameraWorker:
             self.status.clips_remaining = max(0, self.status.clips_remaining - 1)
             self.status.bytes_remaining = self._remaining_base
             self._update_eta()
-            self._publish_status()
+            self.publish_status()
         if stats.failures and stats.result == "ok":
             stats.result = "partial"
             stats.error = f"{stats.failures} clip(s) failed"
@@ -612,7 +626,7 @@ class CameraWorker:
                             old = self.status.speed_bps
                             self.status.speed_bps = inst if old == 0 else 0.7 * old + 0.3 * inst
                             self._update_eta()
-                            self._publish_status()
+                            self.publish_status()
                             window_start, window_bytes = now, 0
                         if written - last_checkpoint >= CHECKPOINT_BYTES:
                             fh.flush()

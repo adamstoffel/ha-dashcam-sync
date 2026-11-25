@@ -70,10 +70,11 @@ class FakeCamera:
         folder: str = "MOVIE",
         time: str = "2026/11/22 10:15:00",
         attr: int = 32,
+        data: bytes | None = None,
     ) -> FakeFile:
         path = f"A:\\CARDV\\{folder}\\{name}"
         url = f"/CARDV/{folder}/{name}".replace("\\", "/")
-        f = FakeFile(path, url, make_bytes(name, size), attr, time)
+        f = FakeFile(path, url, data if data is not None else make_bytes(name, size), attr, time)
         self.files.append(f)
         return f
 

@@ -40,12 +40,19 @@ def glyph(size: int, bg: bool = True) -> Image.Image:
     # Windows and wheels punched out in the background colour
     hole = BLUE if bg else (0, 0, 0, 0)
     d.polygon(
-        [(s * 0.33, body_top - s * 0.01), (s * 0.385, s * 0.54), (s * 0.615, s * 0.54), (s * 0.67, body_top - s * 0.01)],
+        [
+            (s * 0.33, body_top - s * 0.01),
+            (s * 0.385, s * 0.54),
+            (s * 0.615, s * 0.54),
+            (s * 0.67, body_top - s * 0.01),
+        ],
         fill=hole,
     )
     for x in (0.31, 0.69):
         d.ellipse((s * (x - 0.07), s * 0.72, s * (x + 0.07), s * 0.86), fill=DARK if bg else fg)
-        d.ellipse((s * (x - 0.03), s * 0.76, s * (x + 0.03), s * 0.82), fill=WHITE if bg else (0, 0, 0, 0))
+        d.ellipse(
+            (s * (x - 0.03), s * 0.76, s * (x + 0.03), s * 0.82), fill=WHITE if bg else (0, 0, 0, 0)
+        )
     return img.resize((size, size), Image.LANCZOS)
 
 

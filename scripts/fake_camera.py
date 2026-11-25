@@ -19,7 +19,13 @@ async def main(family: str, port: int) -> None:
     cam = FakeCamera(family)
     if family == "novatek":
         cam.add_novatek("20261122_101500_F.MP4", 300_000, time="2026/11/22 10:15:00")
-        cam.add_novatek("20261122_101600_F.MP4", 200_000, folder="MOVIE\\RO", time="2026/11/22 10:16:00", attr=33)
+        cam.add_novatek(
+            "20261122_101600_F.MP4",
+            200_000,
+            folder="MOVIE\\RO",
+            time="2026/11/22 10:16:00",
+            attr=33,
+        )
     elif family == "viidure":
         cam.add_viidure("loop", "20261122_101500_F.ts", 300_000, 1_795_000_000)
         cam.add_viidure("emr", "20261122_101600_F.ts", 200_000, 1_795_000_060)
@@ -31,4 +37,9 @@ async def main(family: str, port: int) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv[1] if len(sys.argv) > 1 else "novatek", int(sys.argv[2]) if len(sys.argv) > 2 else 0))
+    asyncio.run(
+        main(
+            sys.argv[1] if len(sys.argv) > 1 else "novatek",
+            int(sys.argv[2]) if len(sys.argv) > 2 else 0,
+        )
+    )

@@ -44,9 +44,22 @@ def test_gate_template_is_incomplete_by_design() -> None:
 @pytest.mark.parametrize(
     ("mutation", "expected"),
     [
-        (lambda t: t.replace("| pass | pass | pass | pass | n/a | pass | pass |", "| pass | fail | pass | pass | n/a | pass | pass |", 1), "list = fail"),
-        (lambda t: "\n".join(t.splitlines()[:-1]), "no camera tested for driver http_index on aarch64"),
-        (lambda t: t.replace("novatek | amd64", "novatek | armv7"), "no camera tested for driver novatek on amd64"),
+        (
+            lambda t: t.replace(
+                "| pass | pass | pass | pass | n/a | pass | pass |",
+                "| pass | fail | pass | pass | n/a | pass | pass |",
+                1,
+            ),
+            "list = fail",
+        ),
+        (
+            lambda t: "\n".join(t.splitlines()[:-1]),
+            "no camera tested for driver http_index on aarch64",
+        ),
+        (
+            lambda t: t.replace("novatek | amd64", "novatek | armv7"),
+            "no camera tested for driver novatek on amd64",
+        ),
     ],
 )
 def test_gate_blocks_failures_and_gaps(mutation, expected: str) -> None:  # type: ignore[no-untyped-def]

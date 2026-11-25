@@ -2,6 +2,7 @@
 """Run the whole app against a fake camera, no car or Home Assistant needed.
 
     python scripts/dev.py            # app panel on http://127.0.0.1:8099, API on :8100
+    python scripts/dev.py --demo     # real (generated) video clips with thumbnails; needs ffmpeg
 
 The fake camera serves a few clips over a Novatek-style API. Edit
 ``.dev-data/options.json`` while it runs: the daemon hot-reloads it.
@@ -9,11 +10,15 @@ The fake camera serves a few clips over a Novatek-style API. Edit
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
+import shutil
 import signal
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,17 +29,35 @@ from dashcam_sync.daemon import Daemon, DaemonConfig  # noqa: E402
 from dashcam_sync.engine import Timing  # noqa: E402
 from fakecam import FakeCamera  # noqa: E402
 
-DATA = ROOT / ".dev-data"
+DATA = Path(tempfile.gettempdir()) / "dashcam-demo"
 
 
-async def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+def make_demo_video(source: str, seconds: int = 4) -> bytes:
+    """A small real H.264 clip, so the panel can show thumbnails and play it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "clip.mp4"
+        subprocess.run(
+            ["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", f"{source}=size=640x360:rate=15",
+             "-t", str(seconds), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out)],
+            check=True,
+        )  # fmt: skip
+        return out.read_bytes()
+
+
+async def main(demo: bool) -> None:
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     cam = FakeCamera("novatek")
     host = await cam.start()
-    for minute, folder, attr in ((15, "MOVIE", 32), (16, "MOVIE\\RO", 33), (17, "MOVIE", 32)):
+    sources = ("testsrc2", "smptebars", "mandelbrot")
+    for i, (minute, folder, attr) in enumerate(
+        ((15, "MOVIE", 32), (16, "MOVIE\\RO", 33), (17, "MOVIE", 32))
+    ):
+        data = make_demo_video(sources[i]) if demo else None
         cam.add_novatek(
             f"20261122_10{minute}00_F.MP4", 400_000 + minute * 10_000,
-            folder=folder, time=f"2026/11/22 10:{minute}:00", attr=attr,
+            folder=folder, time=f"2026/11/22 10:{minute}:00", attr=attr, data=data,
         )  # fmt: skip
     DATA.mkdir(exist_ok=True)
     options = DATA / "options.json"
@@ -43,10 +66,16 @@ async def main() -> None:
             json.dumps(
                 {
                     "cameras": [
-                        {"id": "fake", "name": "Fake dashcam", "connection": "lan", "host": host,
-                         "driver": "auto", "enabled": True}  # fmt: skip
+                        {
+                            "id": "fake",
+                            "name": "Fake dashcam",
+                            "connection": "lan",
+                            "host": host,
+                            "driver": "auto",
+                            "enabled": True,
+                        }  # fmt: skip
                     ],
-                    "sync": {"mode": "everything", "remux_to_mp4": False, "thumbnails": False},
+                    "sync": {"mode": "everything", "remux_to_mp4": False, "thumbnails": demo},
                 },
                 indent=2,
             )
@@ -76,4 +105,14 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--demo", action="store_true", help="generate real video clips (needs ffmpeg)"
+    )
+    parser.add_argument("--fresh", action="store_true", help="delete .dev-data first")
+    args = parser.parse_args()
+    if args.fresh:
+        shutil.rmtree(DATA, ignore_errors=True)
+    asyncio.run(main(args.demo))
