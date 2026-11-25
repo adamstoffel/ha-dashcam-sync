@@ -45,5 +45,5 @@ See [docs/writing-a-driver.md](docs/writing-a-driver.md). In short: capture a de
 
 ## Branches and releases
 
-- `main` is the default branch and is protected (see [.github/rulesets](.github/rulesets/README.md)): work happens on a branch, lands by pull request (squash or rebase) once every CI job is green, and history stays linear.
+- `main` is the default branch and is protected by repository rulesets (Settings › Rules): work happens on a branch, lands by pull request (squash or rebase) once every CI job is green, and history stays linear. The required checks are listed by CI job name, so if you rename a job in `.github/workflows/ci.yml`, update the ruleset too or merges will wait for a check that never runs.
 - Releases are tags `vYYYY.M.patch` on `main` (betas `vYYYY.M.patchbN`). Release tags are immutable. The release workflow refuses a stable tag until the hardware gate for that version passes.
