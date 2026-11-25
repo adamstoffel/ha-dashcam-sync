@@ -4,6 +4,8 @@ All notable changes to the integration and the app. Both are released together w
 
 ## Unreleased
 
+- App: change where clips are stored from the panel (Storage › Location: local folder, a network share or attached disk, or both), and **Move clips** to bring existing clips to the new place. Each copy is size-checked before the old one is deleted; the move is resumable, cancellable, refuses to start when the destination is missing, and takes turns with shipping, retention and deletes. API: `GET/PATCH /storage/location`, `GET/POST/DELETE /storage/migration`, and `migration` push events.
+- App: validation errors from the API now name the field and the reason instead of "1 validation error".
 - App: a local disk added in Home Assistant (**Settings › System › Storage › Add storage › Local disk**: a USB drive, SD card or internal drive) can now be the second storage target, not only a network share. The same safety rule applies: it must be mounted at exactly that folder, so a missing disk never fills the system disk.
 - Integration: fixed the integration failing to load on Home Assistant 2026.11 (`cannot import name 'async_extract_referenced_entity_ids' from 'homeassistant.helpers.service'`). The helper now comes from `homeassistant.helpers.target`, which exists in both older and newer releases.
 - CI: a new check that every Home Assistant name the integration imports exists in the minimum supported version (`scripts/check_ha_api.py`), and a nightly run against the newest release. The tests only ever ran on an older Home Assistant than the one the integration claims to support, which is how the above got through.

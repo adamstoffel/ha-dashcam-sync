@@ -103,6 +103,18 @@ A second disk in the Home Assistant machine (USB drive, SD card in a built-in re
 
 If the disk is unplugged, new clips wait in the local spool and move over when it is back. For an SD card, use a "high endurance" card: dashcam footage is a lot of continuous writing.
 
+#### Changing where clips are stored
+
+Open the panel's **Storage** page. Under **Location**, choose where new clips go (this Home Assistant, a network share or disk, or both), the local folder, and which attached share or disk to use, then **Save location**. You can also edit `storage` on this Configuration tab.
+
+A change only affects new clips. If existing clips are now in the wrong place, the Storage page says how many and offers **Move clips**:
+
+- Each clip is copied to its new place (with its thumbnail and metadata), its size is checked, and only then is the old copy deleted. On the same disk the files are simply renamed.
+- Clips end up wherever the settings put them: switching to a disk moves them off the system disk, switching to *both* adds the second copy, switching back to local brings them home.
+- The move runs one clip at a time. **Cancel**, a restart or a full disk stops it after the clip in hand; press **Move clips** again to continue where it stopped. Nothing is copied twice.
+- It does not start while the new location is not attached or not writable, and the location cannot be changed while a move is running.
+- Clips whose files cannot be reached are left alone, as are copies on an old disk that is no longer attached. The page lists both.
+
 ### Retention
 
 Retention runs daily at `purge_time` and after each sync, for each target on its own rules.

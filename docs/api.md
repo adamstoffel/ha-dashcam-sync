@@ -28,6 +28,7 @@ Push messages (`{"type": ..., "ts": ..., "rev": ...}`):
 | `session` | `camera`, `result` (`sync_completed` or `sync_failed`), `clips`, `bytes` or `reason`, `error` | A sync session ended. |
 | `safety` | `route_unsafe` (camera ids) | The default route moved onto a hotspot interface: disconnect the Wi-Fi. |
 | `overlap` | `camera`, `report` | The address-block check result changed. |
+| `migration` | the `job` fields of `GET /storage/migration` | Progress of a clip move, once per clip and at the end. |
 | `options`, `purge_completed`, `issue`, `clip_keep`, `clip_deleted` | varies | Things the integration should re-read. |
 
 ## Cameras
@@ -57,6 +58,11 @@ Push messages (`{"type": ..., "ts": ..., "rev": ...}`):
 | `DELETE /clips/{id}` | Delete from every target. |
 | `GET /storage` | Health of each target (mounted, writable, free space, clip bytes) and the last purge. |
 | `POST /purge` | Run retention. Body: `{"dry_run": true}` returns what would be deleted. |
+| `GET /storage/location` | Current `target`, `local_folder` and `network_folder`, and the network shares and local disks Home Assistant has attached under `/media` or `/share` (`name`, `path`, `usage`, `kind`: `network` or `disk`, `fstype`). |
+| `PATCH /storage/location` | Change any of `target`, `local_folder`, `network_folder` (written to the app options). Only new clips follow; the answer includes the plan for moving the existing ones. `409` while clips are being moved. |
+| `GET /storage/migration` | `plan`: clips and bytes to move, copies to remove, destinations, and clips that are `unavailable` (files unreachable), `stranded` (on an unattached old disk) or still `processing`, plus `blocked` (why it cannot start). `job`: the running or last move. |
+| `POST /storage/migration` | Start moving existing clips to where the current settings put them (`202`). `409` with `nothing_to_move`, `already_running` or the blocking reason. Progress is pushed as `migration` events. |
+| `DELETE /storage/migration` | Stop after the clip being moved. An interrupted move can be started again; it continues where it stopped. |
 | `GET /sessions?limit=50&camera=<id>` | Recent sync sessions (diagnostics). |
 
 ## Options, logs and the setup wizard

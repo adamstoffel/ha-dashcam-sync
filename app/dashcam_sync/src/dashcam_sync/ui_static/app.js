@@ -196,8 +196,21 @@ async function clips() {
   });
 }
 
+const BLOCKED = {
+  network_not_mounted: "The network share or disk is not attached. Check it under Settings › System › Storage.",
+  network_not_writable: "The network share or disk cannot be written to.",
+  local_not_writable: "The local folder cannot be written to.",
+  already_running: "Clips are already being moved.",
+  nothing_to_move: "Every clip is already where the settings put it.",
+};
+const TARGETS = { local: "This Home Assistant", network: "The network share or disk", both: "Both" };
+
 async function storage() {
-  const s = await api("storage");
+  const [s, loc] = await Promise.all([api("storage"), api("storage/location")]);
+  const cur = loc.current;
+  const names = loc.attached.map((a) => a.name);
+  const netOptions = loc.attached.map((a) => `<option value="${esc(a.name)}">${esc(a.name)} (${a.kind === "disk" ? "disk" : "network"}, ${esc(a.fstype)})</option>`).join("")
+    + (cur.network_folder && !names.includes(cur.network_folder) ? `<option value="${esc(cur.network_folder)}">${esc(cur.network_folder)} (not attached)</option>` : "");
   main.innerHTML = `<h2>Storage</h2>
     <div class="card muted">Mode: <b>${esc(s.mode)}</b>${s.last_purge ? ` · last purge removed ${s.last_purge.count} copies (${bytes(s.last_purge.bytes_freed)})` : ""}</div>
     ${Object.values(s.targets).map((t) => {
@@ -206,14 +219,81 @@ async function storage() {
         <div class="muted">${esc(t.root)}</div><div class="bar" title="${used.toFixed(0)}% used"><div style="width:${used}%"></div></div>
         <div>Clips ${bytes(t.clip_bytes)} · free ${bytes(t.free_bytes)} of ${bytes(t.total_bytes)}</div></div>`;
     }).join("")}
+    <h2>Location</h2>
+    <div class="card">
+      <label for="l-target">Where new clips go</label>
+      <select id="l-target">${Object.entries(TARGETS).map(([v, t]) => `<option value="${v}" ${v === cur.target ? "selected" : ""}>${t}</option>`).join("")}</select>
+      <label for="l-local">Local folder (under /media)</label>
+      <input id="l-local" value="${esc(cur.local_folder)}">
+      <div id="l-net-row">
+        <label for="l-net">Network share or disk</label>
+        ${netOptions ? `<select id="l-net">${netOptions}</select>` : `<div class="muted" id="l-net-none">None attached. Add a network share or a local disk (USB drive, SD card) under Settings › System › Storage, with usage Media or Share.</div>`}
+      </div>
+      <p><button id="l-save" class="primary">Save location</button></p>
+      <div id="l-out" class="muted">Only new clips follow a change. Existing clips can be moved afterwards.</div>
+    </div>
+    <div id="move"></div>
     <h2>Retention</h2>
     <p><button id="dry">Dry run</button> <button id="purge" class="danger">Purge now</button></p>
     <div id="purge-out"></div>`;
+  if (cur.network_folder && $("#l-net")) $("#l-net").value = cur.network_folder;
+  const syncNet = () => { $("#l-net-row").hidden = $("#l-target").value === "local"; };
+  $("#l-target").onchange = syncNet; syncNet();
+  $("#l-save").onclick = async () => {
+    const body = { target: $("#l-target").value, local_folder: $("#l-local").value.trim() };
+    if ($("#l-net")) body.network_folder = $("#l-net").value;
+    try {
+      await api("storage/location", { method: "PATCH", body });
+      await storage();  // the targets above follow the new settings too
+      $("#l-out").textContent = "Saved. New clips go to the new location.";
+    } catch (e) { $("#l-out").textContent = e.message; }
+  };
   const show = (r) => { $("#purge-out").innerHTML = `<div class="card">${r.dry_run ? "Would remove" : "Removed"} <b>${r.count}</b> copies, ${bytes(r.bytes_freed)}.
     ${r.skipped_targets.length ? `<div class="muted">Skipped (offline): ${esc(r.skipped_targets.join(", "))}</div>` : ""}
     <table>${(r.clips || []).slice(0, 50).map((c) => `<tr><td>${esc(c.camera)}</td><td>${esc(c.kind)}</td><td>${when(c.start)}</td><td>${esc(c.target)}</td><td class="muted">${esc(c.reason)}</td></tr>`).join("")}</table></div>`; };
   $("#dry").onclick = async () => show(await api("purge", { method: "POST", body: { dry_run: true } }));
   $("#purge").onclick = async () => { if (confirm("Run the purge now?")) show(await api("purge", { method: "POST", body: {} })); };
+  drawMove(await api("storage/migration"));
+}
+
+function drawMove(m) {
+  const box = $("#move");
+  if (!box) return;
+  clearInterval(timer);
+  const job = m.job, plan = m.plan;
+  if (job.status === "running") {
+    const pct = job.bytes_total ? (100 * job.bytes_done) / job.bytes_total : 0;
+    box.innerHTML = `<div class="card"><div class="row"><b>Moving clips</b><button id="m-cancel">Cancel</button></div>
+      <div class="bar"><div style="width:${pct}%"></div></div>
+      <div>${job.clips_done} of ${job.clips_total} clips · ${bytes(job.bytes_done)} of ${bytes(job.bytes_total)}</div>
+      <div class="muted">${esc(job.current || "")}</div></div>`;
+    $("#m-cancel").onclick = async () => drawMove(await api("storage/migration", { method: "DELETE" }));
+    timer = setInterval(async () => { try { drawMove(await api("storage/migration")); } catch (e) { clearInterval(timer); } }, 2000);
+    return;
+  }
+  const last = job.status === "done" ? `Last move: ${job.clips_done} clips, ${bytes(job.bytes_done)}${job.errors ? `, ${job.errors} could not be moved (see Logs)` : ""}.`
+    : job.status === "cancelled" ? `The last move was cancelled after ${job.clips_done} of ${job.clips_total} clips. Start it again to continue.`
+    : job.status === "failed" ? `The last move stopped: ${esc(job.error || "error")}. Start it again to continue.` : "";
+  const notes = plan ? [
+    plan.unavailable ? `${plan.unavailable} clips cannot be moved because their files cannot be reached.` : "",
+    plan.stranded ? `${plan.stranded} copies are on a disk or share that is not attached; they are left as they are.` : "",
+    plan.processing ? `${plan.processing} clips are still being processed and will be moved next time.` : "",
+  ].filter(Boolean) : [];
+  if (plan && plan.needed) {
+    const where = Object.values(plan.destinations).map(esc).join(" and ");
+    box.innerHTML = `<div class="card notice"><b>${plan.clips} clips (${bytes(plan.bytes)}) are not where the settings put them.</b>
+      <div>Moving copies them to ${where}, checks each copy, and only then deletes the old one${plan.copies_to_remove ? ` (${plan.copies_to_remove} old copies)` : ""}.</div>
+      ${plan.blocked ? `<div class="muted" id="m-blocked">${esc(BLOCKED[plan.blocked] || plan.blocked)}</div>` : ""}
+      ${notes.map((n) => `<div class="muted">${n}</div>`).join("")}
+      ${last ? `<div class="muted">${last}</div>` : ""}
+      <p><button id="m-start" class="primary" ${plan.blocked ? "disabled" : ""}>Move clips</button></p></div>`;
+    $("#m-start").onclick = async () => {
+      try { drawMove(await api("storage/migration", { method: "POST" })); }
+      catch (e) { box.insertAdjacentHTML("beforeend", `<div class="card notice bad">${esc(BLOCKED[e.message] || e.message)}</div>`); }
+    };
+    return;
+  }
+  box.innerHTML = last || notes.length ? `<div class="card" id="m-done">${[last || "Every clip is where the settings put it.", ...notes].map((n) => `<div>${n}</div>`).join("")}</div>` : "";
 }
 
 async function logs() {

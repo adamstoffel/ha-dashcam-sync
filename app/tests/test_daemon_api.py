@@ -815,3 +815,113 @@ async def test_the_instance_id_is_stable_and_independent_of_the_token(tmp_path: 
         finally:
             await daemon.stop()
     assert ids[0] == ids[1] and len(ids[0]) == 16 and not set(ids[0]) & set("xyz")
+
+
+# ------------------------------------------------------- storage location and moving clips
+
+
+async def _send(stack: Stack, method: str, path: str, body: Any = None) -> Any:
+    async with stack.http.request(method, f"{stack.api}{path}", headers=stack.h(), json=body) as r:
+        return r.status, await r.json()
+
+
+def _attach_disk(stack: Stack, name: str = "usb") -> Path:
+    """Pretend Home Assistant attached a local disk at /media/<name> (exFAT)."""
+    disk = stack.daemon.config.media_root / name
+    disk.mkdir(parents=True, exist_ok=True)
+    stack.daemon.config.mountinfo = f"1 2 179:1 / {disk} rw - exfat /dev/sdb1 rw\n"
+    stack.daemon._build_storage()
+    return disk
+
+
+async def test_changing_the_location_then_moving_the_clips(stack: Stack) -> None:
+    await synced(stack)
+    disk = _attach_disk(stack)
+    events = stack.daemon.bus.subscribe()
+
+    status, loc = await stack.get("/api/v1/storage/location")
+    assert status == 200 and loc["current"]["target"] == "local"
+    assert [a["name"] for a in loc["attached"]] == ["usb"]
+    assert loc["attached"][0]["kind"] == "disk" and loc["attached"][0]["usage"] == "media"
+
+    status, after = await _send(
+        stack, "PATCH", "/api/v1/storage/location", {"target": "network", "network_folder": "usb"}
+    )
+    assert status == 200, after
+    assert after["plan"]["needed"] and after["plan"]["clips"] == 2
+    assert after["plan"]["blocked"] is None
+    assert stack.daemon.options.storage.network_folder == "usb"
+
+    status, started = await stack.post("/api/v1/storage/migration")
+    assert status == 202 and started["job"]["status"] == "running"
+    await wait_for(lambda: stack.daemon.migration.state.status == "done")
+
+    status, now = await stack.get("/api/v1/storage/migration")
+    assert now["plan"]["needed"] is False and now["job"]["clips_done"] == 2
+    for clip in stack.daemon.cat.list_clips(camera="car"):
+        copies = stack.daemon.cat.copies(clip.id)
+        assert [c.target for c in copies] == ["network"]
+        assert Path(copies[0].path).is_relative_to(disk)
+    assert not list((stack.daemon.config.media_root / "dashcam_sync").rglob("*.MP4"))
+    # Clips are still served from their new place.
+    clip = stack.daemon.cat.list_clips(camera="car")[0]
+    async with stack.http.get(f"{stack.api}/api/v1/clips/{clip.id}/file", headers=stack.h()) as r:
+        assert r.status == 200 and len(await r.read()) == clip.size
+    kinds = set()
+    while not events.empty():
+        kinds.add(events.get_nowait()["type"])
+    assert "migration" in kinds
+
+
+async def test_location_changes_are_validated(stack: Stack) -> None:
+    for body, message in (
+        ({}, "nothing to change"),
+        ({"target": "network"}, "choose a network share or disk"),
+        ({"target": "both", "network_folder": ""}, "choose a network share or disk"),
+        ({"local_folder": "../etc"}, "folder must be a plain relative name"),
+        ({"target": "cloud"}, "target"),
+    ):
+        status, err = await _send(stack, "PATCH", "/api/v1/storage/location", body)
+        assert status == 400 and message in err["error"], (body, err)
+
+
+async def test_moving_refuses_when_nothing_to_do_or_the_disk_is_missing(stack: Stack) -> None:
+    await synced(stack)
+    status, err = await stack.post("/api/v1/storage/migration")
+    assert status == 409 and err["error"] == "nothing_to_move"
+
+    # A disk that is configured but not attached: the plan says why, the move refuses.
+    status, after = await _send(
+        stack, "PATCH", "/api/v1/storage/location", {"target": "network", "network_folder": "gone"}
+    )
+    assert after["plan"]["blocked"] == "network_not_mounted"
+    status, err = await stack.post("/api/v1/storage/migration")
+    assert status == 409 and err["error"] == "network_not_mounted"
+
+
+async def test_the_location_cannot_change_while_clips_are_moving(stack: Stack) -> None:
+    stack.daemon.migration.state.status = "running"
+    try:
+        status, err = await _send(stack, "PATCH", "/api/v1/storage/location", {"local_folder": "x"})
+        assert status == 409
+        status, err = await stack.post("/api/v1/storage/migration")
+        assert status == 409 and err["error"] == "already_running"
+        status, now = await _send(stack, "DELETE", "/api/v1/storage/migration")
+        assert status == 200 and now["plan"] is None
+        assert stack.daemon.migration._cancel.is_set()
+    finally:
+        stack.daemon.migration.state.status = "idle"
+
+
+async def test_an_options_change_cancels_a_running_move(stack: Stack) -> None:
+    stack.daemon.migration.state.status = "running"
+    try:
+        stack.daemon._build_storage()
+        assert stack.daemon.migration._cancel.is_set()
+    finally:
+        stack.daemon.migration.state.status = "idle"
+
+
+async def test_the_storage_payload_reports_the_move(stack: Stack) -> None:
+    _, storage = await stack.get("/api/v1/storage")
+    assert storage["migration"]["status"] == "idle"

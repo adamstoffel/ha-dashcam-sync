@@ -11,6 +11,7 @@ import os
 import secrets
 import signal
 import socket
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -27,6 +28,7 @@ from .drivers import DRIVER_BY_NAME
 from .engine import CameraWorker, SyncContext, Timing
 from .errors import ConfigError
 from .events import EventBus
+from .migrate import Migration, MigrationPlan, plan_migration
 from .netblock import (
     CameraBlock,
     OverlapReport,
@@ -135,6 +137,10 @@ class Daemon:
         self._tasks: list[asyncio.Task[None]] = []
         self._background: set[asyncio.Task[None]] = set()
         self._options_lock = asyncio.Lock()
+        # Taken by everything that moves or deletes clip files: shipping, retention,
+        # deletes, and the clip mover (per clip). Never held across an await.
+        self.files_lock = threading.Lock()
+        self.migration = Migration()
         self._runners: list[web.AppRunner] = []
         self._options_mtime = 0.0
         self._stop = asyncio.Event()
@@ -232,6 +238,11 @@ class Daemon:
     async def stop(self) -> None:
         """Graceful stop: every camera is restored before the app exits."""
         self._stop.set()
+        # A clip move stops after the clip in hand; an interrupted one resumes next time.
+        self.migration.cancel()
+        moving = [t for t in self._background if not t.done()]
+        if moving:
+            await asyncio.wait(moving, timeout=5)
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
@@ -370,6 +381,9 @@ class Daemon:
         )
 
     def _build_storage(self) -> None:
+        if self.migration.running:
+            # The destination just changed: the running move is aimed at the old one.
+            self.migration.cancel()
         self.storage = StorageManager(
             self.cat,
             self.options.storage,
@@ -472,7 +486,8 @@ class Daemon:
     def _ship_safely(self) -> None:
         try:
             if self.storage is not None:
-                self.storage.ship_pending()
+                with self.files_lock:
+                    self.storage.ship_pending()
         except OSError as err:
             _LOGGER.warning("Shipping to the network target failed: %s", err)
         except Exception:  # never let one bad copy stop shipping for good
@@ -484,7 +499,13 @@ class Daemon:
 
     async def run_purge(self, *, dry_run: bool) -> PurgeReport:
         assert self.retention is not None
-        report = await asyncio.to_thread(self.retention.run, dry_run=dry_run)
+        retention = self.retention
+
+        def purge() -> PurgeReport:
+            with self.files_lock:
+                return retention.run(dry_run=dry_run)
+
+        report = await asyncio.to_thread(purge)
         if not dry_run:
             self.last_purge = {"ts": time.time(), **report.as_dict()}
             self.last_purge.pop("clips", None)
@@ -492,6 +513,60 @@ class Daemon:
                 "purge_completed", count=len(report.deleted), bytes_freed=report.bytes_freed
             )
         return report
+
+    async def delete_clip(self, clip_id: int) -> int:
+        """Delete a clip everywhere (the delete action), between other file work."""
+        retention = self.retention
+        assert retention is not None
+
+        def delete() -> int:
+            with self.files_lock:
+                return retention.delete_clip_everywhere(clip_id)
+
+        return await asyncio.to_thread(delete)
+
+    # ----------------------------------------------------------- moving clips
+
+    async def migration_plan(self) -> MigrationPlan:
+        return await asyncio.to_thread(plan_migration, self.cat, self.store_)
+
+    def migration_payload(self, plan: MigrationPlan | None = None) -> dict[str, Any]:
+        return {
+            "plan": plan.as_dict() if plan is not None else None,
+            "job": self.migration.state.as_dict(),
+        }
+
+    async def start_migration(self) -> MigrationPlan:
+        """Start moving clips to where the current settings put them.
+
+        Raises ``ValueError`` with a short reason when there is nothing to do or the move
+        cannot start (already running, destination offline).
+        """
+        if self.migration.running:
+            raise ValueError("already_running")
+        plan = await self.migration_plan()
+        if not plan.moves:
+            raise ValueError("nothing_to_move")
+        if plan.blocked:
+            raise ValueError(plan.blocked)
+        loop = asyncio.get_running_loop()
+        storage = self.store_
+
+        def progress(state: Any) -> None:  # called from the worker thread
+            loop.call_soon_threadsafe(lambda: self.bus.publish("migration", **state.as_dict()))
+
+        self.migration.begin(plan)
+        self.bus.publish("migration", **self.migration.state.as_dict())
+
+        async def run() -> None:
+            await asyncio.to_thread(
+                self.migration.run, self.cat, storage, self.files_lock, progress
+            )
+
+        task = asyncio.create_task(run())
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+        return plan
 
     # ------------------------------------------------------------- background
 
@@ -720,6 +795,7 @@ class Daemon:
             if TARGET_NETWORK in health
             else None,
             "last_purge": self.last_purge,
+            "migration": self.migration.state.as_dict(),
         }
 
     def status_payload(self) -> dict[str, Any]:

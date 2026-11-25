@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 from aiohttp import web
+from pydantic import ValidationError
 
 from . import API_VERSION, __version__
 from .catalog import TARGET_LOCAL, TARGET_NETWORK
@@ -24,8 +25,9 @@ from .detect import detect
 from .errors import ConfigError, DashcamError, UnsupportedCamera
 from .hostcheck import validate_camera_host
 from .models import Kind
-from .options import CameraOptions
+from .options import CameraOptions, StorageOptions
 from .profile import capture_profile
+from .storage import attached_storage
 from .supervisor import SupervisorError
 
 if TYPE_CHECKING:
@@ -45,6 +47,16 @@ def _daemon(request: web.Request) -> Daemon:
 
 def _error(status: int, message: str, **extra: Any) -> web.Response:
     return web.json_response({"error": message, **extra}, status=status)
+
+
+def _invalid(err: ValueError) -> str:
+    """A readable first problem from a validation error: ``field: reason``."""
+    if isinstance(err, ValidationError) and err.errors():
+        first = err.errors()[0]
+        where = ".".join(str(p) for p in first.get("loc", ()))
+        reason = str(first.get("msg", "invalid")).removeprefix("Value error, ")
+        return f"{where}: {reason}" if where else reason
+    return str(err).splitlines()[0]
 
 
 async def _json(request: web.Request) -> dict[str, Any]:
@@ -230,7 +242,7 @@ async def camera_patch(request: web.Request) -> web.Response:
     try:  # validate the merged entry: a bad value must not make the camera vanish
         CameraOptions.model_validate({**cam.model_dump(exclude_none=True), **body})
     except ValueError as err:
-        return _error(400, str(err).splitlines()[0])
+        return _error(400, _invalid(err))
 
     def mutate(raw: dict[str, Any]) -> None:
         for entry in raw.get("cameras", []):
@@ -384,8 +396,7 @@ async def clip_delete(request: web.Request) -> web.Response:
     clip_id = _clip_id(request)
     if d.cat.get_clip(clip_id) is None:
         return _error(404, "unknown clip")
-    assert d.retention is not None
-    freed = await asyncio.to_thread(d.retention.delete_clip_everywhere, clip_id)
+    freed = await d.delete_clip(clip_id)
     d.bus.publish("clip_deleted", clip_id=clip_id)
     return web.json_response({"ok": True, "bytes_freed": freed})
 
@@ -431,6 +442,72 @@ async def purge(request: web.Request) -> web.Response:
 
 async def storage(request: web.Request) -> web.Response:
     return web.json_response(await asyncio.to_thread(_daemon(request).storage_payload))
+
+
+LOCATION_FIELDS = ("target", "local_folder", "network_folder")
+
+
+async def storage_location_get(request: web.Request) -> web.Response:
+    """The current location settings and the disks and shares that can be chosen."""
+    d = _daemon(request)
+    opts = d.options.storage
+    attached = await asyncio.to_thread(
+        attached_storage, d.config.media_root, d.config.share_root, d.config.mountinfo
+    )
+    return web.json_response(
+        {
+            "current": {k: getattr(opts, k) for k in LOCATION_FIELDS},
+            "attached": attached,
+        }
+    )
+
+
+async def storage_location_set(request: web.Request) -> web.Response:
+    """Change where new clips go; existing clips are moved separately (``migration``)."""
+    d = _daemon(request)
+    if d.migration.running:
+        return _error(409, "clips are being moved; cancel that first")
+    body = await _json(request)
+    changes = {k: body[k] for k in LOCATION_FIELDS if k in body}
+    if not changes:
+        return _error(400, "nothing to change")
+    merged = {**d.options.storage.model_dump(), **changes}
+    try:
+        checked = StorageOptions.model_validate(merged)
+    except ValueError as err:
+        return _error(400, _invalid(err))
+    if checked.target in ("network", "both") and not checked.network_folder:
+        return _error(400, "choose a network share or disk")
+
+    def mutate(raw: dict[str, Any]) -> None:
+        storage = raw.setdefault("storage", {})
+        for key in changes:
+            storage[key] = getattr(checked, key)
+
+    await d.update_raw_options(mutate)
+    plan = await d.migration_plan()
+    return web.json_response(d.migration_payload(plan))
+
+
+async def migration_get(request: web.Request) -> web.Response:
+    d = _daemon(request)
+    plan = None if d.migration.running else await d.migration_plan()
+    return web.json_response(d.migration_payload(plan))
+
+
+async def migration_start(request: web.Request) -> web.Response:
+    d = _daemon(request)
+    try:
+        plan = await d.start_migration()
+    except ValueError as err:
+        return _error(409, str(err))
+    return web.json_response(d.migration_payload(plan), status=202)
+
+
+async def migration_cancel(request: web.Request) -> web.Response:
+    d = _daemon(request)
+    d.migration.cancel()
+    return web.json_response(d.migration_payload())
 
 
 async def sessions(request: web.Request) -> web.Response:
@@ -556,7 +633,7 @@ async def wizard_save_camera(request: web.Request) -> web.Response:
     try:
         cam = CameraOptions.model_validate(body)
     except ValueError as err:
-        return _error(400, str(err).splitlines()[0])
+        return _error(400, _invalid(err))
     if cam.host:
         await _camera_host(d, cam.host)
     entry = {k: v for k, v in cam.model_dump().items() if v is not None}
@@ -648,6 +725,11 @@ def _add_routes(app: web.Application) -> None:
     r.add_get(f"{API}/clips/{{clip}}/thumb", clip_thumb)
     r.add_post(f"{API}/purge", purge)
     r.add_get(f"{API}/storage", storage)
+    r.add_get(f"{API}/storage/location", storage_location_get)
+    r.add_patch(f"{API}/storage/location", storage_location_set)
+    r.add_get(f"{API}/storage/migration", migration_get)
+    r.add_post(f"{API}/storage/migration", migration_start)
+    r.add_delete(f"{API}/storage/migration", migration_cancel)
     r.add_get(f"{API}/logs", logs)
     r.add_get(f"{API}/sessions", sessions)
     r.add_get(f"{API}/options", options_get)

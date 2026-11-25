@@ -85,6 +85,42 @@ def is_storage_mount(path: Path | str, mountinfo: str | None = None) -> bool:
     return fstype is not None and fstype.lower() in STORAGE_FSTYPES
 
 
+def attached_storage(
+    media_root: Path, share_root: Path, mountinfo: str | None = None
+) -> list[dict[str, str]]:
+    """Network shares and local disks Home Assistant has attached for media or share use.
+
+    These are the names ``network_folder`` accepts: a mount directly below ``/media`` or
+    ``/share`` with a file system Home Assistant mounts there.
+    """
+    if mountinfo is None:
+        try:
+            mountinfo = Path("/proc/self/mountinfo").read_text("utf-8")
+        except OSError:
+            return []
+    found: dict[str, dict[str, str]] = {}
+    for line in mountinfo.splitlines():
+        left, sep, right = line.partition(" - ")
+        fields, rfields = left.split(), right.split()
+        if not sep or len(fields) < 5 or not rfields:
+            continue
+        point = Path(_unescape_mount(fields[4]))
+        fstype = rfields[0].lower()
+        if fstype not in STORAGE_FSTYPES:
+            continue
+        for usage, root in (("media", media_root), ("share", share_root)):
+            if point.parent == root:
+                kind = "network" if fstype in NETWORK_FSTYPES else "disk"
+                found[point.name] = {
+                    "name": point.name,
+                    "path": str(point),
+                    "usage": usage,
+                    "kind": kind,
+                    "fstype": fstype,
+                }
+    return sorted(found.values(), key=lambda m: m["name"])
+
+
 @dataclass(slots=True)
 class Usage:
     total: int

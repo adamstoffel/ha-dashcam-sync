@@ -97,6 +97,23 @@ async function waitFor(fn, what, timeout = 30000) {
     assert.match(await page.locator("#purge-out").innerText(), /Would remove\s+0/);  // everything is fresh or kept
     await shot("storage");
 
+    // ---- Changing the location, then moving the existing clips there.
+    assert.equal(await page.locator("#l-net-row").isHidden(), true, "no share picker while local");
+    await page.fill("#l-local", "dashcam_moved");
+    await page.click("#l-save");
+    await page.waitForSelector("#m-start");
+    assert.match(await page.locator("#move").innerText(), /clips \(.+\) are not where the settings put them/);
+    await shot("storage-move");
+    await page.click("#m-start");
+    await page.waitForSelector("#m-done", { timeout: 60000 });
+    assert.match(await page.locator("#m-done").innerText(), /Last move: \d+ clips/);
+    const paths = await page.evaluate(async () => (await (await fetch("api/v1/clips?limit=500")).json()).map((c) => c.path || ""));
+    assert.ok(paths.length > 0 && paths.every((p) => p.includes("/dashcam_moved/")), "every clip moved: " + paths.join(", "));
+    // Clips still play from the new place.
+    const firstId = await page.evaluate(async () => (await (await fetch("api/v1/clips?limit=1")).json())[0].id);
+    const res = await ctx.request.get(PANEL + `api/v1/clips/${firstId}/file`);
+    assert.equal(res.status(), 200);
+
     // ---- Cameras + the setup wizard probing the fake camera.
     await page.click("nav a[href='#cameras']");
     await page.waitForSelector("button:text('Add camera')");
