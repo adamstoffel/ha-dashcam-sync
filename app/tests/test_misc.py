@@ -33,6 +33,20 @@ def test_event_bus_drops_oldest_when_a_subscriber_is_slow() -> None:
     bus.publish("x")  # no subscribers: fine
 
 
+def test_event_bus_numbers_events_so_clients_can_order_them_against_status_reads() -> None:
+    bus = EventBus()
+    queue = bus.subscribe()
+    assert bus.seq == 0
+    bus.publish("camera")
+    sampled_at = bus.mark()  # state sampled here, published after another event
+    status_read = bus.mark()  # a second sample of the same moment gets its own number
+    bus.publish("camera")
+    bus.publish("hub", as_of=sampled_at)
+    assert (sampled_at, status_read) == (2, 3)
+    assert [queue.get_nowait()["rev"] for _ in range(3)] == [1, 4, 2]
+    assert bus.seq == 5  # the late event still advances the count
+
+
 def test_restore_flags_roundtrip(tmp_path: Path) -> None:
     flags = RestoreFlags(tmp_path / "r")
     assert flags.get("car") is None and flags.pending() == []

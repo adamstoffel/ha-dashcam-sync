@@ -13,10 +13,12 @@ The app serves a small JSON API for the integration (and for you, if you want to
 | --- | --- |
 | `GET /healthz` | Liveness for the Supervisor watchdog. No token. |
 | `GET /info` | `api_version`, `app_version`, `instance` (a stable random id that survives token changes), camera count. |
-| `GET /status` | Everything at once: `cameras` (by id), `storage`, `issues`, `network`, `overlap`. |
+| `GET /status` | Everything at once: `cameras` (by id), `storage`, `issues`, `network`, `overlap`, and `rev` (see below). |
 | `GET /ws` | WebSocket. Sends a `snapshot` (same shape as `/status`) on connect, then pushes events. Send the text `snapshot` to request another. |
 
-Push messages (`{"type": ..., "ts": ...}`):
+Push messages (`{"type": ..., "ts": ..., "rev": ...}`):
+
+**Ordering.** `rev` puts pushes and status reads in one order. A status answer or `snapshot` reflects every push whose `rev` is at most its own. Every sample of state gets its own `rev`, so two answers or pushes never share one. A client that reads the status while pushes are arriving keeps a pushed state only if the push's `rev` is higher than the answer's; otherwise the answer is at least as new.
 
 | `type` | Payload | Meaning |
 | --- | --- | --- |

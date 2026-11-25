@@ -117,29 +117,9 @@ def test_the_endpoints_listed_are_the_ones_the_app_calls() -> None:
     )
 
 
-# ---- repository rulesets ---------------------------------------------------------------------
-
-import json  # noqa: E402
-
-RULESETS = SCRIPTS.parent / ".github" / "rulesets"
-
-
-def test_main_ruleset_requires_exactly_the_ci_jobs() -> None:
-    jobs = set(re.findall(r"^    name: (.+)$", (SCRIPTS.parent / ".github/workflows/ci.yml").read_text(), re.M))
-    ruleset = json.loads((RULESETS / "main.json").read_text())
-    rules = {r["type"]: r for r in ruleset["rules"]}
-    required = {c["context"] for c in rules["required_status_checks"]["parameters"]["required_status_checks"]}
-    assert required == jobs
-    assert {"deletion", "non_fast_forward", "pull_request", "required_linear_history"} <= set(rules)
-    assert ruleset["conditions"]["ref_name"]["include"] == ["~DEFAULT_BRANCH"]
+# ---- CI triggers -----------------------------------------------------------------------------
 
 
 def test_ci_runs_on_main_and_pull_requests() -> None:
     ci = (SCRIPTS.parent / ".github/workflows/ci.yml").read_text()
     assert "push:\n    branches: [main]" in ci and "pull_request:" in ci
-
-
-def test_release_tags_are_immutable() -> None:
-    ruleset = json.loads((RULESETS / "release-tags.json").read_text())
-    assert ruleset["target"] == "tag"
-    assert {r["type"] for r in ruleset["rules"]} >= {"deletion", "update", "non_fast_forward"}

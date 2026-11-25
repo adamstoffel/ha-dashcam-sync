@@ -125,7 +125,7 @@ async def info(request: web.Request) -> web.Response:
 
 
 async def status(request: web.Request) -> web.Response:
-    return web.json_response(await asyncio.to_thread(_daemon(request).status_payload))
+    return web.json_response(await _daemon(request).status_with_rev())
 
 
 async def websocket(request: web.Request) -> web.StreamResponse:
@@ -134,7 +134,7 @@ async def websocket(request: web.Request) -> web.StreamResponse:
     await ws.prepare(request)
     request.app[SOCKETS].add(ws)
     queue = d.bus.subscribe()
-    await ws.send_json({"type": "snapshot", **await asyncio.to_thread(d.status_payload)})
+    await ws.send_json({"type": "snapshot", **await d.status_with_rev()})
 
     async def pump() -> None:
         while True:
@@ -145,9 +145,7 @@ async def websocket(request: web.Request) -> web.StreamResponse:
     try:
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.TEXT and msg.data == "snapshot":
-                await ws.send_json(
-                    {"type": "snapshot", **await asyncio.to_thread(d.status_payload)}
-                )
+                await ws.send_json({"type": "snapshot", **await d.status_with_rev()})
             elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):
                 break
     finally:

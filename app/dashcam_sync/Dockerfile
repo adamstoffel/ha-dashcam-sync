@@ -1,4 +1,5 @@
-# The base image is pinned by digest in the release pipeline (Renovate keeps it current).
+# Home Assistant's base image; the tag tracks patch releases of Python and Alpine, so every
+# rebuild picks up their fixes. Move to a new Python or Alpine minor by editing this tag.
 ARG BUILD_FROM=ghcr.io/home-assistant/base-python:3.13-alpine3.22
 FROM ${BUILD_FROM}
 

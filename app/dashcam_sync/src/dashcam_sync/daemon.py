@@ -586,14 +586,20 @@ class Daemon:
         last = ""
         while True:
             try:
+                as_of = self.bus.mark()
                 payload = await asyncio.to_thread(self._hub_snapshot)
                 encoded = json.dumps(payload, sort_keys=True, default=str)
                 if encoded != last:
                     last = encoded
-                    self.bus.publish("hub", **payload)
+                    self.bus.publish("hub", as_of=as_of, **payload)
             except Exception:
                 _LOGGER.exception("Building the hub snapshot failed")
             await asyncio.sleep(self.config.hub_push_interval)
+
+    async def status_with_rev(self) -> dict[str, Any]:
+        """The status plus ``rev``: every pushed event up to it is reflected in the answer."""
+        rev = self.bus.mark()
+        return {**await asyncio.to_thread(self.status_payload), "rev": rev}
 
     def _hub_snapshot(self) -> dict[str, Any]:
         full = self.status_payload()
