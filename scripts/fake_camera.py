@@ -12,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app" / "tests"))
 
-from fakecam import FakeCamera  # noqa: E402
+from fakecam import FakeCamera
 
 
 async def main(family: str, port: int) -> None:

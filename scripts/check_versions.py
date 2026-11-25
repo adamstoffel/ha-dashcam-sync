@@ -26,13 +26,13 @@ def collect() -> dict[str, str]:
     }
     config = (ROOT / "app/dashcam_sync/config.yaml").read_text()
     found["app config.yaml"] = re.search(
-        r'^version:\s*"?([^"\s]+)"?', config, re.M
+        r'^version:\s*"?([^"\s]+)"?', config, re.MULTILINE
     ).group(1)  # type: ignore[union-attr]
     init = (ROOT / "app/dashcam_sync/src/dashcam_sync/__init__.py").read_text()
     found["app __version__"] = re.search(r'__version__\s*=\s*"([^"]+)"', init).group(1)  # type: ignore[union-attr]
     pyproject = (ROOT / "app/pyproject.toml").read_text()
     found["app pyproject.toml"] = re.search(
-        r'^version\s*=\s*"([^"]+)"', pyproject, re.M
+        r'^version\s*=\s*"([^"]+)"', pyproject, re.MULTILINE
     ).group(1)  # type: ignore[union-attr]
     return found
 

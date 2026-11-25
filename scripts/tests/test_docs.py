@@ -31,13 +31,13 @@ def slug(heading: str) -> str:
 def anchors(path: Path) -> set[str]:
     return {
         slug(m.group(1))
-        for m in re.finditer(r"^#{1,6}\s+(.+)$", path.read_text(), re.M)
+        for m in re.finditer(r"^#{1,6}\s+(.+)$", path.read_text(), re.MULTILINE)
     }
 
 
 @pytest.mark.parametrize("doc", sorted(DOCS), ids=lambda p: str(p.relative_to(ROOT)))
 def test_links_resolve(doc: Path) -> None:
-    text = re.sub(r"```.*?```", "", doc.read_text(), flags=re.S)
+    text = re.sub(r"```.*?```", "", doc.read_text(), flags=re.DOTALL)
     problems = []
     for match in LINK.finditer(text):
         target = next(g for g in match.groups() if g)

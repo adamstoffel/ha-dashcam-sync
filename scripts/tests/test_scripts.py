@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -10,8 +11,8 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS))
 
-import check_hardware_gate as gate  # noqa: E402
-import check_versions as versions  # noqa: E402
+import check_hardware_gate as gate
+import check_versions as versions
 
 ROWS = "\n".join(
     f"| Cam {d} | {d} | {a} | pass | pass | pass | pass | n/a | pass | pass |"
@@ -72,3 +73,45 @@ def test_gate_main(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert gate.main(["x", "v1900.1.0"]) == 1  # no results file
     assert "does not exist" in capsys.readouterr().out
     assert gate.validate("no table here") == ["no table rows found"]
+
+
+# ---- the Supervisor role checker -------------------------------------------------------------
+
+import check_supervisor_roles as roles
+
+EXCERPT = (Path(__file__).parent / "fixtures" / "security_excerpt.py").read_text()
+
+
+def test_roles_checker_accepts_the_real_rules_excerpt() -> None:
+    assert roles.check(EXCERPT) == []
+
+
+def test_roles_checker_notices_when_an_endpoint_is_closed_to_the_default_role() -> None:
+    narrowed = EXCERPT.replace(
+        'r"|/.+/info"\n            r")$"', 'r"|/host/info"\n            r")$"'
+    )
+    problems = roles.check(narrowed)
+    assert any("GET /network/info" in p for p in problems)
+    closed_discovery = EXCERPT.replace('r"|/discovery.*"\n        ', "")
+    assert any("/discovery" in p for p in roles.check(closed_discovery))
+    no_self = EXCERPT.replace('r"|/addons/self/(?!security|update)[^/]+"\n        ', "")
+    assert any("/addons/self/options" in p for p in roles.check(no_self))
+
+
+def test_roles_checker_reports_a_changed_layout_instead_of_passing() -> None:
+    assert "layout changed" in roles.check("x = 1")[0]
+    assert "layout changed" in roles.check("def broken(:")[0]
+
+
+def test_the_endpoints_listed_are_the_ones_the_app_calls() -> None:
+    src = (
+        SCRIPTS.parent / "app/dashcam_sync/src/dashcam_sync/supervisor.py"
+    ).read_text()
+    used_in_app = set(
+        re.findall(r'"/(?:network/info|discovery|addons/self/[a-z]+)', src)
+    )
+    listed = {path.split("/", 2)[1] for _, path in roles.USED}
+    assert {"network", "discovery", "addons"} <= listed
+    assert any("/network/info" in u for u in used_in_app) and any(
+        "/discovery" in u for u in used_in_app
+    )

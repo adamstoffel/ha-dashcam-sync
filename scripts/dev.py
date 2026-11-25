@@ -25,9 +25,9 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app" / "dashcam_sync" / "src"))
 sys.path.insert(0, str(ROOT / "app" / "tests"))
 
-from dashcam_sync.daemon import Daemon, DaemonConfig  # noqa: E402
-from dashcam_sync.engine import Timing  # noqa: E402
-from fakecam import FakeCamera  # noqa: E402
+from dashcam_sync.daemon import Daemon, DaemonConfig
+from dashcam_sync.engine import Timing
+from fakecam import FakeCamera
 
 DATA = Path(tempfile.gettempdir()) / "dashcam-demo"
 

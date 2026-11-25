@@ -169,6 +169,7 @@ python scripts/dev.py        # fake camera + daemon: panel on :8099, API on :810
 **Verified (automated, in CI):**
 
 - Everything in the table above, against a fake camera and a fake Supervisor, with real ffmpeg, real HTTP and WebSocket servers, and the real integration running inside Home Assistant **2026.2.3** (the newest release on PyPI when this was built; the integration targets 2026.11).
+- **The Supervisor's real role rules** were parsed and evaluated: the *default* app role can reach `GET /network/info`, `POST/DELETE /discovery`, and `GET /addons/self/info`, `POST /addons/self/options` and `/restart` (a nightly job re-checks this; Wi-Fi *scanning* is not reachable with the default role, so the wizard asks for the SSID instead).
 - `hassfest` passes for the integration; the Docker image builds and starts (`ghcr.io/home-assistant/base-python`, Python 3.13, ffmpeg).
 
 **Not verified** (needs hardware or infrastructure not available during the build; these are the plan's Spike 0 and release gates):
