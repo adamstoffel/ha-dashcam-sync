@@ -4,6 +4,8 @@ All notable changes to the integration and the app. Both are released together w
 
 ## Unreleased
 
+- Integration: fixed the integration failing to load on Home Assistant 2026.11 (`cannot import name 'async_extract_referenced_entity_ids' from 'homeassistant.helpers.service'`). The helper now comes from `homeassistant.helpers.target`, which exists in both older and newer releases.
+- CI: a new check that every Home Assistant name the integration imports exists in the minimum supported version (`scripts/check_ha_api.py`), and a nightly run against the newest release. The tests only ever ran on an older Home Assistant than the one the integration claims to support, which is how the above got through.
 - App: an optional **Integration token** option, so the integration can be added by hand when discovery does not appear (the previous instructions pointed at a token that was never logged). The token is never logged; the log now says when discovery was offered.
 - Tests: two timing assumptions removed (the WebSocket snapshot reply could be preceded by another push; the Novatek heartbeat test assumed a fixed delay).
 

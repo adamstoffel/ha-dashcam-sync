@@ -11,6 +11,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS))
 
+import check_ha_api as ha_api
 import check_hardware_gate as gate
 import check_versions as versions
 
@@ -123,3 +124,75 @@ def test_the_endpoints_listed_are_the_ones_the_app_calls() -> None:
 def test_ci_runs_on_main_and_pull_requests() -> None:
     ci = (SCRIPTS.parent / ".github/workflows/ci.yml").read_text()
     assert "push:\n    branches: [main]" in ci and "pull_request:" in ci
+
+
+def _fake_ha(tmp_path: Path) -> Path:
+    """A tiny stand-in for the homeassistant package, using Python 3.14's bare ``except A, B``."""
+    pkg = tmp_path / "ha" / "homeassistant" / "helpers"
+    pkg.mkdir(parents=True)
+    (pkg.parent / "__init__.py").write_text("")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "target.py").write_text(
+        "from os import path as re_exported\n"
+        "class TargetSelection: ...\n"
+        "def async_extract_referenced_entity_ids(): ...\n"
+        "LIMIT = 3\n"
+        "def risky():\n"
+        "    try:\n"
+        "        pass\n"
+        "    except KeyError, ValueError:\n"
+        "        pass\n"
+    )
+    (pkg / "service.py").write_text("def extract_entity_ids(): ...\n")
+    (pkg / "entity_registry.py").write_text("")
+    return tmp_path / "ha"
+
+
+def _integration(tmp_path: Path, imports: str) -> Path:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "mod.py").write_text(imports)
+    return src
+
+
+def test_ha_api_check_accepts_names_that_exist(tmp_path: Path) -> None:
+    src = _integration(
+        tmp_path,
+        "from homeassistant.helpers.target import TargetSelection, LIMIT, re_exported\n"
+        "from homeassistant.helpers import entity_registry as er\n"  # a submodule
+        "from homeassistant.helpers.service import extract_entity_ids\n",
+    )
+    assert ha_api.missing_imports(_fake_ha(tmp_path), [src]) == []
+
+
+def test_ha_api_check_finds_a_name_that_was_removed(tmp_path: Path) -> None:
+    src = _integration(
+        tmp_path,
+        "from homeassistant.helpers.service import async_extract_referenced_entity_ids\n"
+        "from homeassistant.helpers.target import TargetSelection\n",
+    )
+    [problem] = ha_api.missing_imports(_fake_ha(tmp_path), [src])
+    assert (
+        "homeassistant.helpers.service has no async_extract_referenced_entity_ids"
+        in problem
+    )
+    assert problem.endswith("mod.py:1: " + problem.split(": ", 1)[1])
+
+
+def test_ha_api_check_finds_a_module_that_was_removed(tmp_path: Path) -> None:
+    src = _integration(tmp_path, "from homeassistant.helpers.gone import thing\n")
+    [problem] = ha_api.missing_imports(_fake_ha(tmp_path), [src])
+    assert "no module homeassistant.helpers.gone" in problem
+
+
+def test_ha_api_check_ignores_everything_that_is_not_homeassistant(
+    tmp_path: Path,
+) -> None:
+    src = _integration(
+        tmp_path, "from os import nothing_here\nfrom .local import x\nimport json\n"
+    )
+    assert ha_api.missing_imports(_fake_ha(tmp_path), [src]) == []
+
+
+def test_the_minimum_ha_version_comes_from_hacs_json() -> None:
+    assert re.fullmatch(r"\d{4}\.\d{1,2}\.\d+", ha_api.minimum_version())

@@ -63,6 +63,16 @@ jobs:
       - working-directory: app
         run: DASHCAM_FUZZ=1 pytest tests/test_properties.py -p no:randomly
 
+  ha-api-latest:
+    name: Integration imports exist in the newest Home Assistant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python scripts/check_ha_api.py latest
+
   supervisor-roles:
     name: The default role still reaches what the app uses
     runs-on: ubuntu-latest
