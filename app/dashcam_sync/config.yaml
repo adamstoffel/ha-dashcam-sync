@@ -66,6 +66,7 @@ options:
     thumbnails: true
 schema:
   log_level: list(debug|info|warning|error)?
+  api_token: password?
   cameras:
     - id: match(^[a-z0-9_]{1,32}$)
       name: str

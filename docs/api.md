@@ -2,7 +2,7 @@
 
 The app serves a small JSON API for the integration (and for you, if you want to script it). Base URL: `http://<app host>:8100/api/v1`. The same routes are served to the ingress panel on port 8099, where Home Assistant has already authenticated you and the Supervisor's ingress proxy is the only client allowed.
 
-- **Authentication.** Every route except `GET /healthz` needs `Authorization: Bearer <token>`. The token is generated on first start, stored in `/data`, and handed to Core only through Supervisor discovery. Credentials (`/cameras/<id>/wifi`) are never served on the ingress port.
+- **Authentication.** Every route except `GET /healthz` needs `Authorization: Bearer <token>`. The token is generated on first start, stored in `/data`, and handed to Core only through Supervisor discovery, unless you set the app's optional **Integration token** yourself (at least 32 characters) to add the integration by hand. Credentials (`/cameras/<id>/wifi`) are never served on the ingress port.
 - **Versioning.** `GET /info` returns `api_version` (currently `1`). The integration raises a repair issue if the two sides are incompatible.
 - **Errors.** Failures are `{"error": "<message>"}` with a 4xx or 5xx status.
 - **Hostile input.** The wizard endpoints that take a host refuse public, loopback and Home Assistant-internal addresses.

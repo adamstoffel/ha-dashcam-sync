@@ -304,7 +304,11 @@ async def test_websocket_snapshot_and_events(stack: Stack) -> None:
         assert first["type"] == "snapshot" and "car" in first["cameras"]
         assert isinstance(first["rev"], int)
         await ws.send_str("snapshot")
-        assert (await ws.receive_json())["type"] == "snapshot"
+        for _ in range(60):  # other pushes may be interleaved before the requested snapshot
+            reply = await asyncio.wait_for(ws.receive_json(), 5)
+            if reply["type"] == "snapshot":
+                break
+        assert reply["type"] == "snapshot"
         status_rev = (await stack.get("/api/v1/status"))[1]["rev"]
         assert status_rev > first["rev"]
         # Every read is its own sample: even with no event between them, revs differ.
@@ -633,7 +637,9 @@ async def test_daemon_announces_through_discovery(
     fake_supervisor: tuple[str, list[tuple[str, str, Any]]],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO")
     url, calls = fake_supervisor
     from dashcam_sync import supervisor as sup_mod
 
@@ -661,6 +667,8 @@ async def test_daemon_announces_through_discovery(
         assert discovery[2]["service"] == "dashcam_sync"
         assert discovery[2]["config"]["token"] == TOKEN and discovery[2]["config"]["port"] == 0
         assert daemon.network.known and daemon.discovery_uuid == "abc123"
+        assert any("Offered to Home Assistant" in m for m in caplog.messages)
+        assert TOKEN not in caplog.text  # the token is never logged
     finally:
         await daemon.stop()
     assert ("DELETE", "/discovery/abc123", None) in calls
@@ -673,6 +681,55 @@ async def test_token_is_generated_once_and_kept(tmp_path: Path) -> None:
     first = Daemon(cfg)._load_token()
     assert len(first) >= 32 and (tmp_path / "api_token").stat().st_mode & 0o777 == 0o600
     assert Daemon(cfg)._load_token() == first
+
+
+def _daemon_with_options(tmp_path: Path, options: object) -> Daemon:
+    (tmp_path / "options.json").write_text(json.dumps(options), "utf-8")
+    return Daemon(
+        DaemonConfig(
+            data_dir=tmp_path, media_root=tmp_path, share_root=tmp_path, use_supervisor=False
+        )
+    )
+
+
+async def test_a_token_typed_into_the_app_configuration_is_used(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    chosen = "a-token-the-owner-typed-0123456789abcdef"
+    daemon = _daemon_with_options(tmp_path, {"api_token": f"  {chosen}  "})
+    with caplog.at_level("INFO"):
+        assert daemon._load_token() == chosen
+    assert not (tmp_path / "api_token").exists()  # nothing generated or stored
+    assert any("API token from the app configuration" in m for m in caplog.messages)
+    assert chosen not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "options", [{}, {"api_token": ""}, {"api_token": "   "}, {"api_token": 7}, [1]]
+)
+async def test_without_a_configured_token_one_is_generated(tmp_path: Path, options: object) -> None:
+    token = _daemon_with_options(tmp_path, options)._load_token()
+    assert len(token) >= 32 and (tmp_path / "api_token").read_text("utf-8") == token
+
+
+async def test_a_too_short_configured_token_is_ignored_with_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    daemon = _daemon_with_options(tmp_path, {"api_token": "short"})
+    token = daemon._load_token()
+    assert token != "short" and len(token) >= 32
+    assert any("needs at least 32 characters" in m for m in caplog.messages)
+    assert "short" not in [m.split()[-1] for m in caplog.messages]
+
+
+async def test_a_broken_options_file_does_not_stop_the_token(tmp_path: Path) -> None:
+    (tmp_path / "options.json").write_text("{not json", "utf-8")
+    daemon = Daemon(
+        DaemonConfig(
+            data_dir=tmp_path, media_root=tmp_path, share_root=tmp_path, use_supervisor=False
+        )
+    )
+    assert len(daemon._load_token()) >= 32
 
 
 async def test_hub_state_is_pushed_when_it_changes(stack: Stack) -> None:

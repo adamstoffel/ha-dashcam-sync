@@ -2,6 +2,12 @@ configuration:
   log_level:
     name: Log level
     description: How much the app writes to its log. Changing this restarts the app.
+  api_token:
+    name: Integration token (optional)
+    description: >-
+      Only needed to add the integration by hand when discovery does not appear. Leave it empty
+      to use a generated token that is handed to Home Assistant automatically. If you set one
+      (at least 32 characters), enter the same value in the integration, then restart the app.
   cameras:
     name: Cameras
     description: >-

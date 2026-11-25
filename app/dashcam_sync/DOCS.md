@@ -45,6 +45,10 @@ BlackVue, AIT and Ambarella families are planned for 1.1 and 1.2. Unsupported ca
 
 Everything is stored as the app's options and can be edited in three places: this **Configuration** tab, the setup wizard in the panel, and (for things that live in Core) the integration's options flow. The daemon hot-reloads the options; only changing `log_level` restarts the app.
 
+### Integration token
+
+Normally you do nothing: the app generates a token and hands it to Home Assistant through Supervisor discovery. If **Dashcam Sync discovered** never appears, you can add the integration by hand. Set **Integration token (optional)** on this tab to a string of at least 32 characters (a password manager's generated one is fine), restart the app, then add the integration with host `local-dashcam-sync`, port `8100` and that token. The log says `Using the API token from the app configuration` when it was picked up, and never prints the token itself. Clear the field and restart to go back to the generated token.
+
 ### Cameras
 
 | Option | Meaning |

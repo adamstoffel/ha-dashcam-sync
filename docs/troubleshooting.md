@@ -4,7 +4,7 @@ Start with the diagnostics download (**Settings › Devices & services › Dashc
 
 | Symptom | Likely cause and fix |
 | --- | --- |
-| "Dashcam Sync discovered" never appears | The integration is not installed yet, or the app is stopped. Install the integration and restart Home Assistant. Otherwise add it manually: host `local-dashcam-sync`, port `8100` and the token from the app's log. |
+| "Dashcam Sync discovered" never appears | The integration is not installed yet, or the app is stopped. Install the integration and restart Home Assistant. Otherwise add it manually: set **Integration token** (32+ characters) on the app's Configuration tab, restart the app, then add the integration with host `local-dashcam-sync`, port `8100` and that token. The app's log says `Offered to Home Assistant through Supervisor discovery` when it announced itself. |
 | Repair: **No Wi-Fi adapter** | Home Assistant OS has no driver for the card. Use a supported USB adapter, or a camera that can join your home network (LAN mode). |
 | The camera never connects | Check the Wi-Fi profile (**Settings › System › Network**), the signal at the parking spot, and the address-block check. A hotspot camera needs its own adapter. |
 | Repair: **address overlap** | Something on your network uses an address in the camera's four-address block. Follow *Overlapping addresses* in the app's documentation, then press **Re-check**. The camera stays paused until the check passes. |

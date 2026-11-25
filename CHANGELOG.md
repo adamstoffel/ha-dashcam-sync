@@ -2,6 +2,11 @@
 
 All notable changes to the integration and the app. Both are released together with the same CalVer version (`YYYY.M.patch`).
 
+## Unreleased
+
+- App: an optional **Integration token** option, so the integration can be added by hand when discovery does not appear (the previous instructions pointed at a token that was never logged). The token is never logged; the log now says when discovery was offered.
+- Tests: two timing assumptions removed (the WebSocket snapshot reply could be preceded by another push; the Novatek heartbeat test assumed a fixed delay).
+
 ## 2026.11.0
 
 First version. See `app/dashcam_sync/CHANGELOG.md` for the app side.

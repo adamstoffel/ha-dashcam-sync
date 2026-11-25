@@ -160,7 +160,10 @@ async def test_novatek_heartbeat_runs_during_download(
     stream = await drv.open(rec, 0)
     import asyncio
 
-    await asyncio.sleep(0.1)
+    for _ in range(500):  # wait for the beats rather than assume how fast a busy machine is
+        if novatek_cam.heartbeats >= 2:
+            break
+        await asyncio.sleep(0.01)
     assert novatek_cam.heartbeats >= 2
     await read_all(stream)
     await drv.close()

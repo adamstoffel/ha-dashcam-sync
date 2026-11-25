@@ -57,6 +57,8 @@ from .supervisor import (
 
 _LOGGER = logging.getLogger(__name__)
 
+MIN_TOKEN_LENGTH = 32
+
 NETWORK_POLL = 15.0
 NETWORK_POLL_JOINED = 5.0
 OVERLAP_RECHECK = 6 * 3600.0
@@ -256,15 +258,36 @@ class Daemon:
     def request_stop(self) -> None:
         self._stop.set()
 
+    def _configured_token(self) -> str:
+        """A token the owner typed into the app configuration, for manual integration setup."""
+        try:
+            raw = json.loads((self.config.options_path or Path()).read_text("utf-8"))
+        except (OSError, ValueError):
+            return ""
+        token = raw.get("api_token") if isinstance(raw, dict) else None
+        if not isinstance(token, str) or not token.strip():
+            return ""
+        token = token.strip()
+        if len(token) < MIN_TOKEN_LENGTH:
+            _LOGGER.warning(
+                "Ignoring api_token: it needs at least %d characters. Using a generated one.",
+                MIN_TOKEN_LENGTH,
+            )
+            return ""
+        _LOGGER.info("Using the API token from the app configuration")
+        return token
+
     def _load_token(self) -> str:
         if self.config.api_token:
             return self.config.api_token
+        if configured := self._configured_token():
+            return configured
         path = self.config.data_dir / "api_token"
         try:
             token = path.read_text("utf-8").strip()
         except FileNotFoundError:
             token = ""
-        if len(token) < 32:
+        if len(token) < MIN_TOKEN_LENGTH:
             token = secrets.token_urlsafe(32)
             path.write_text(token, "utf-8")
             path.chmod(0o600)
@@ -296,6 +319,11 @@ class Daemon:
             self.discovery_uuid = await self.supervisor.post_discovery(
                 "dashcam_sync",
                 {"host": host, "port": self.config.api_port, "token": self.token},
+            )
+            _LOGGER.info(
+                "Offered to Home Assistant through Supervisor discovery (%s:%d)",
+                host,
+                self.config.api_port,
             )
         except SupervisorError as err:
             _LOGGER.warning("Discovery failed (manual setup still works): %s", err)
