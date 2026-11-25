@@ -13,3 +13,4 @@ dist/
 .dev-data/
 /ui-screens/
 node_modules/
+.hypothesis/
