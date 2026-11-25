@@ -4,6 +4,14 @@ All notable changes to the integration and the app. Both are released together w
 
 ## Unreleased
 
+- App: interrupted downloads, audited and hardened, each with a fault-injection test that fails on the previous code:
+  - a camera that states no file size could have a cut-off download recorded as complete; completeness is now confirmed by asking for the bytes after the end;
+  - a body that ended early was thrown away; it is now kept and resumed;
+  - a partial answer from the wrong offset would have been spliced in; it is now refused (and one that restarts from byte 0 restarts the file);
+  - a crash between placing a file and recording it caused a full re-download and a hidden duplicate; the placed file is now adopted;
+  - after a remux the original was deleted before the clip pointed at the new file, so a crash could leave a clip pointing at nothing; the order is reversed, and clips left that way by older versions are repaired at startup;
+  - shipping to a disk or share could leave `_2` duplicates after a crash; a finished copy is now reused;
+  - partial downloads nothing will resume and temporary copies from crashed runs are cleaned up at startup.
 - App: change where clips are stored from the panel (Storage › Location: local folder, a network share or attached disk, or both), and **Move clips** to bring existing clips to the new place. Each copy is size-checked before the old one is deleted; the move is resumable, cancellable, refuses to start when the destination is missing, and takes turns with shipping, retention and deletes. API: `GET/PATCH /storage/location`, `GET/POST/DELETE /storage/migration`, and `migration` push events.
 - App: validation errors from the API now name the field and the reason instead of "1 validation error".
 - App: a local disk added in Home Assistant (**Settings › System › Storage › Add storage › Local disk**: a USB drive, SD card or internal drive) can now be the second storage target, not only a network share. The same safety rule applies: it must be mounted at exactly that folder, so a missing disk never fills the system disk.

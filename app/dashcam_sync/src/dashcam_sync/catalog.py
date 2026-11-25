@@ -395,6 +395,21 @@ class Catalog:
         with self._lock:
             self._conn.execute("DELETE FROM copies WHERE clip_id=? AND target=?", (clip_id, target))
 
+    def referenced_parts(self) -> set[str]:
+        """Partial files that an unfinished clip will resume from."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT part_path FROM clips WHERE part_path IS NOT NULL AND status != 'done'"
+            ).fetchall()
+        return {r["part_path"] for r in rows}
+
+    def path_in_use(self, path: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM copies WHERE path=? LIMIT 1", (path,)
+            ).fetchone()
+        return row is not None
+
     def copies(self, clip_id: int) -> list[CopyRow]:
         with self._lock:
             rows = self._conn.execute("SELECT * FROM copies WHERE clip_id=?", (clip_id,)).fetchall()

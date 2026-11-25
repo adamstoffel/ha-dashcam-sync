@@ -27,7 +27,9 @@ from .drivers import DRIVER_BY_NAME, BaseDriver
 from .drivers.http import CameraHttp
 from .errors import (
     CameraError,
+    Incomplete,
     LinkLost,
+    NothingBeyond,
     ProtocolError,
     StorageError,
     StorageFull,
@@ -38,7 +40,7 @@ from .models import CHANNEL_ORDER, Kind, Recording
 from .options import CameraOptions, SyncMode, SyncOptions
 from .postprocess import PostProcessor
 from .restoreflag import RestoreFlags
-from .storage import PARTIAL_DIR, Destination, StorageManager
+from .storage import PARTIAL_DIR, Destination, StorageManager, clip_relative_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -607,6 +609,11 @@ class CameraWorker:
         storage = self.ctx.storage()
         catalog = self.ctx.catalog
         dest = await asyncio.to_thread(storage.primary_destination, rec.size)
+        adopted = self._adopt_placed(rec, row, dest)
+        if adopted is not None:
+            digest = await asyncio.to_thread(_sha256, adopted)
+            await self._complete(driver, rec, row, dest, adopted, digest, stats)
+            return
         part = self._part_path(row, dest)
         part.parent.mkdir(parents=True, exist_ok=True)
 
@@ -662,25 +669,90 @@ class CameraWorker:
         await stream.aclose()
 
         size = part.stat().st_size
-        expected_total = (
-            stream.start + stream.content_length if stream.content_length is not None else None
-        )
-        if rec.size and size != rec.size:
+        wrote = size - offset
+        claims = {
+            "listing": rec.size or None,
+            "Content-Range": stream.total,
+            "Content-Length": (
+                stream.start + stream.content_length if stream.content_length is not None else None
+            ),
+        }
+        known = {k: v for k, v in claims.items() if v is not None}
+        if len(set(known.values())) > 1:
             self._discard(part, row)
-            raise ProtocolError(f"size {size} does not match listing {rec.size}")
-        if expected_total is not None and size != expected_total:
+            raise ProtocolError(f"the camera's sizes disagree: {known}")
+        expected = next(iter(known.values()), None)
+        if expected is not None and size > expected:
             self._discard(part, row)
-            raise ProtocolError(f"size {size} does not match Content-Length {expected_total}")
+            raise ProtocolError(f"got {size} bytes, expected {expected}")
+        if expected is not None and size < expected:
+            if wrote <= 0:
+                # Resuming made no progress: the file on the card is not what was listed.
+                self._discard(part, row)
+                raise ProtocolError(f"the camera stops at {size} of {expected} bytes")
+            # A clean end before the last byte is almost always the link going away.
+            raise Incomplete(f"stopped at {size} of {expected} bytes; resumes next time")
+        if expected is None:
+            await self._confirm_end(driver, rec, size)
 
         digest = await asyncio.to_thread(_sha256, part)
         final = storage.place(self.camera.id, rec, part, dest)
-        catalog.complete_clip(
+        await self._complete(driver, rec, row, dest, final, digest, stats)
+
+    async def _complete(
+        self,
+        driver: BaseDriver,
+        rec: Recording,
+        row: ClipRow,
+        dest: Destination,
+        final: Path,
+        digest: str,
+        stats: SessionStats,
+    ) -> None:
+        storage = self.ctx.storage()
+        self.ctx.catalog.complete_clip(
             row.id, sha256=digest, target=dest.kind, path=str(final), size=final.stat().st_size
         )
         stats.clips += 1
         self.ctx.post.submit(row.id, final)
         storage.queue_network_copy(row.id)
         await self._delete_from_camera(driver, rec)
+
+    async def _confirm_end(self, driver: BaseDriver, rec: Recording, size: int) -> None:
+        """No size was given anywhere: ask for the bytes after the end before trusting it.
+
+        A body without a length ends at a closed connection, which a dropped link looks
+        exactly like, so the camera has to confirm there is nothing more.
+        """
+        try:
+            probe = await driver.open(rec, size)
+        except NothingBeyond:
+            return  # 416: nothing after the last byte we have
+        try:
+            if probe.range_honored and probe.start == size:
+                async for chunk in probe:
+                    if chunk:
+                        raise Incomplete(f"the camera has more after byte {size}")
+                return  # an empty partial answer: nothing more
+            if probe.total == size:
+                return  # a whole-file answer that states the same size
+        finally:
+            await probe.aclose()
+        raise ProtocolError("the camera gives no size, so the download cannot be confirmed")
+
+    def _adopt_placed(self, rec: Recording, row: ClipRow, dest: Destination) -> Path | None:
+        """A file a crashed run moved into place but never recorded."""
+        if not row.part_path or Path(row.part_path).exists() or not rec.size:
+            return None
+        candidate = dest.target.root / clip_relative_path(self.camera.id, rec)
+        try:
+            if candidate.stat().st_size != rec.size:
+                return None
+        except OSError:
+            return None
+        if self.ctx.catalog.path_in_use(str(candidate)):
+            return None
+        return candidate
 
     def _part_path(self, row: ClipRow, dest: Destination) -> Path:
         if row.part_path and Path(row.part_path).exists():

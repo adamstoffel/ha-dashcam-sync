@@ -170,6 +170,9 @@ class PostProcessor:
             code, _ = await run_tool(ffmpeg_remux_args(path, tmp))
             if code == 0 and tmp.exists() and tmp.stat().st_size > 0:
                 os.replace(tmp, target)
+                # Point the catalogue at the new file before the old one goes: a crash in
+                # between then leaves a spare original, never a clip pointing at nothing.
+                self._record(clip, path, target)
                 if not keep_original:
                     path.unlink(missing_ok=True)
                 final = target

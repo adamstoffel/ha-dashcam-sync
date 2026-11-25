@@ -188,6 +188,8 @@ class Daemon:
         )
         self.post.start()
         self._build_storage()
+        with contextlib.suppress(OSError):
+            self.store_.clean_leftovers()
         self._resume_post_processing()
         await self.network.refresh()
         self._sync_workers()
@@ -215,8 +217,16 @@ class Daemon:
         resumed = 0
         for target in (TARGET_LOCAL, "spool"):
             for clip, copy in self.cat.copies_for_target(target):
-                if clip.post_status == "pending" and copy.path and Path(copy.path).exists():
-                    self.post.submit(clip.id, Path(copy.path))
+                if clip.post_status != "pending" or not copy.path:
+                    continue
+                path = Path(copy.path)
+                remuxed = path.with_suffix(".mp4")
+                if not path.exists() and path.suffix.lower() == ".ts" and remuxed.exists():
+                    # Older versions deleted the original before recording the remux.
+                    self.cat.add_copy(clip.id, copy.target, str(remuxed), remuxed.stat().st_size)
+                    path = remuxed
+                if path.exists():
+                    self.post.submit(clip.id, path)
                     resumed += 1
         if resumed:
             _LOGGER.info("Resuming post-processing of %d clip(s)", resumed)

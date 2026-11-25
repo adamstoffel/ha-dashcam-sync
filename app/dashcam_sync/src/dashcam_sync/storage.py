@@ -271,12 +271,38 @@ def remove_clip_files(path: Path) -> int:
     return freed
 
 
+# camera/YYYY/MM/DD/kind/file: the layout every target shares.
+LAYOUT_DEPTH = 6
+
+
+def layout_relative(path: Path, camera: str) -> Path:
+    """A clip's path below its storage root, recovered from the shared folder layout."""
+    parts = path.parts
+    if len(parts) >= LAYOUT_DEPTH and parts[-LAYOUT_DEPTH] == camera:
+        return Path(*parts[-LAYOUT_DEPTH:])
+    return Path(camera) / path.name
+
+
 def _relative_or_name(path: Path, root: Path, camera_id: str) -> Path:
-    """``path`` relative to ``root``; if the root changed (``local_folder`` edited), keep the name."""
+    """``path`` relative to ``root``; if the root changed (``local_folder`` edited), the layout."""
     try:
         return path.relative_to(root)
     except ValueError:
-        return Path(camera_id) / path.name
+        return layout_relative(path, camera_id)
+
+
+def reuse_or_unique(dst: Path, src: Path) -> Path:
+    """``dst``, or a free name next to it, unless ``dst`` is a finished copy of ``src``.
+
+    A copy that was fully written before a crash, but never recorded, has the same size as
+    its source: reusing it avoids a ``_2`` duplicate on the next run.
+    """
+    try:
+        if dst.is_file() and dst.stat().st_size == src.stat().st_size:
+            return dst
+    except OSError:
+        pass
+    return unique_path(dst)
 
 
 def move_file(src: Path, dst: Path) -> None:
@@ -416,7 +442,7 @@ class StorageManager:
                 self.catalog.remove_copy(clip.id, TARGET_SPOOL)
                 continue
             rel = _relative_or_name(src, self.spool.root, clip.camera)
-            dst = unique_path(self.network.root / rel)
+            dst = reuse_or_unique(self.network.root / rel, src)
             self._ship_files(src, dst)
             self.catalog.remove_copy(clip.id, TARGET_SPOOL)
             self.catalog.add_copy(clip.id, TARGET_NETWORK, str(dst), dst.stat().st_size)
@@ -430,7 +456,7 @@ class StorageManager:
                 continue
             src = Path(local.path)
             rel = _relative_or_name(src, self.local.root, clip.camera)
-            dst = unique_path(self.network.root / rel)
+            dst = reuse_or_unique(self.network.root / rel, src)
             self._ship_files(src, dst, move=False)
             self.catalog.add_copy(clip.id, TARGET_NETWORK, str(dst), dst.stat().st_size)
             shipped += 1
@@ -456,6 +482,39 @@ class StorageManager:
     def queue_network_copy(self, clip_id: int) -> None:
         if self.needs_network_copy():
             self.catalog.add_copy(clip_id, TARGET_NETWORK, "", 0, COPY_PENDING)
+
+    # ---------------------------------------------------------------- cleanup
+
+    def clean_leftovers(self, *, min_age: float = 3600.0) -> int:
+        """Delete partial downloads nothing will resume, and temp copies from crashed runs.
+
+        Only touches ``.partial/*.part`` not referenced by the catalogue and hidden
+        ``.*.tmp`` files older than ``min_age``, on targets that are really there.
+        """
+        keep = self.catalog.referenced_parts()
+        cutoff = time.time() - min_age
+        removed = 0
+        targets = [self.local, self.spool]
+        if self.network is not None and self.network.mount_ok():
+            targets.append(self.network)
+        for target in targets:
+            if not target.root.is_dir():
+                continue
+            candidates = list((target.root / PARTIAL_DIR).glob("*.part"))
+            candidates += [p for p in target.root.rglob(".*.tmp") if p.is_file()]
+            for path in candidates:
+                try:
+                    if path.suffix == ".part" and str(path) in keep:
+                        continue
+                    if path.stat().st_mtime > cutoff:
+                        continue  # may belong to work in progress
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    continue
+        if removed:
+            _LOGGER.info("Removed %d leftover partial or temporary files", removed)
+        return removed
 
     # ------------------------------------------------------------------ health
 

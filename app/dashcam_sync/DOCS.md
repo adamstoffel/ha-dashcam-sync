@@ -37,7 +37,11 @@ BlackVue, AIT and Ambarella families are planned for 1.1 and 1.2. Unsupported ca
 1. The app watches for the camera (every 15 s, or every 3 s for 5 minutes after an arrival hint such as a car tracker coming home).
 2. It detects the camera family, puts the camera in playback mode (this stops recording) and lists the files.
 3. New clips are queued: event clips first, then parking clips, then normal clips from the last `recent_minutes`, then the rest, then photos. Front and rear files with the same start time are queued together.
-4. Each file is downloaded to a `.partial` file and resumed with an HTTP Range request if the link drops. The size is verified against the listing and `Content-Length`, a SHA-256 is stored, and the file is moved into place atomically.
+4. Each file is downloaded to a hidden `.partial` file and only gets its real name, and appears anywhere, once it is complete:
+    - **Interrupted links resume.** A dropped connection, a Wi-Fi fade (no data for 20 s) or a body that ends early keeps the partial file; the next contact continues with an HTTP Range request from the last byte saved to disk. Nothing is fetched twice.
+    - **Resumes are checked.** A partial answer must start exactly where asked (`Content-Range`); a camera that restarts from byte 0 restarts the file, and one that answers from anywhere else is refused rather than spliced.
+    - **Completeness is checked.** The size must match every size the camera states: the listing, `Content-Length` and the `Content-Range` total. If a camera states no size at all, the app asks for the bytes after the end and only accepts the file when the camera confirms there are none; otherwise the clip is marked failed, never kept as complete.
+    - A SHA-256 is stored, and the file is moved into place atomically. A crash between moving it and recording it is picked up on the next visit without downloading again.
 5. **The camera is always put back into recording**, even after errors, a crash or a power loss: a flag is written to disk before playback mode is entered, and the next contact restores first.
 6. In the background, `.ts` files are remuxed to `.mp4` without re-encoding, a 320 px thumbnail is made, and a `.json` sidecar is written.
 

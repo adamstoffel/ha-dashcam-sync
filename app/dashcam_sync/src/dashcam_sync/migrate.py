@@ -36,20 +36,16 @@ from .catalog import (
     CopyRow,
 )
 from .errors import StorageError, StorageFull
-from .storage import StorageManager, Target, remove_clip_files, sidecars, unique_path
+from .storage import (
+    StorageManager,
+    Target,
+    layout_relative,
+    remove_clip_files,
+    reuse_or_unique,
+    sidecars,
+)
 
 _LOGGER = logging.getLogger(__name__)
-
-# camera/YYYY/MM/DD/kind/file: the layout every target shares.
-LAYOUT_DEPTH = 6
-
-
-def layout_relative(path: Path, camera: str) -> Path:
-    """A clip's path below its storage root, recovered from the shared folder layout."""
-    parts = path.parts
-    if len(parts) >= LAYOUT_DEPTH and parts[-LAYOUT_DEPTH] == camera:
-        return Path(*parts[-LAYOUT_DEPTH:])
-    return Path(camera) / path.name
 
 
 def _under(path: Path, root: Path) -> bool:
@@ -225,10 +221,8 @@ def _copy_verified(src: Path, dst: Path) -> None:
 
 def _destination(root: Path, rel: Path, src: Path) -> tuple[Path, bool]:
     """Final path for a copy, and whether an earlier, interrupted run already wrote it."""
-    dst = root / rel
-    if dst.is_file() and dst.stat().st_size == src.stat().st_size:
-        return dst, True
-    return unique_path(dst), False
+    dst = reuse_or_unique(root / rel, src)
+    return dst, dst == root / rel and dst.is_file()
 
 
 def _transfer(src: Path, dst: Path, *, rename: bool) -> None:
