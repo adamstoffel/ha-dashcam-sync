@@ -12,7 +12,7 @@ The app serves a small JSON API for the integration (and for you, if you want to
 | Method and path | Purpose |
 | --- | --- |
 | `GET /healthz` | Liveness for the Supervisor watchdog. No token. |
-| `GET /info` | `api_version`, `app_version`, `instance` (stable id derived from the token), camera count. |
+| `GET /info` | `api_version`, `app_version`, `instance` (a stable random id that survives token changes), camera count. |
 | `GET /status` | Everything at once: `cameras` (by id), `storage`, `issues`, `network`, `overlap`. |
 | `GET /ws` | WebSocket. Sends a `snapshot` (same shape as `/status`) on connect, then pushes events. Send the text `snapshot` to request another. |
 

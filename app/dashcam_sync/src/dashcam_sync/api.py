@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import hmac
 import json
 import logging
@@ -119,7 +118,7 @@ async def info(request: web.Request) -> web.Response:
             "api_version": API_VERSION,
             "app_version": __version__,
             "name": "Dashcam Sync",
-            "instance": hashlib.sha256(d.token.encode()).hexdigest()[:16],
+            "instance": d.instance_id,
             "cameras": len(d.workers),
         }
     )

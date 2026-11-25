@@ -79,11 +79,20 @@ def async_add_entities_for_cameras(
     """Add entities now and whenever the app reports a new camera."""
     coordinator = entry.runtime_data.coordinator
     known: set[str] = set()
-    if hub_factory is not None:
-        async_add_entities(hub_factory(coordinator))
+    known_hub: set[str] = set()
+
+    @callback
+    def _check_hub() -> None:
+        if hub_factory is None:
+            return
+        fresh = [e for e in hub_factory(coordinator) if e.unique_id not in known_hub]
+        known_hub.update(str(e.unique_id) for e in fresh)
+        if fresh:
+            async_add_entities(fresh)
 
     @callback
     def _check() -> None:
+        _check_hub()
         new = set(coordinator.hub.get("cameras", {})) - known
         if not new:
             return

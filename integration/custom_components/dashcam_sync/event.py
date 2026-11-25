@@ -45,7 +45,9 @@ class ClipEvent(DashcamSyncEntity, EventEntity):
             return
         kind = message.get("type")
         if kind == "clip":
-            clip = message.get("clip") or {}
+            clip = message.get("clip")
+            if not isinstance(clip, dict) or clip.get("id") is None:
+                return
             event_type = "event_clip" if message.get("event_clip") else "clip"
             self._trigger_event(
                 event_type,

@@ -32,6 +32,14 @@ type EventListener = Callable[[Payload], None]
 type DashcamSyncConfigEntry = ConfigEntry[DashcamSyncRuntimeData]
 
 
+def _valid_hub(data: Payload, *, require_cameras: bool = False) -> bool:
+    """The shapes the entities rely on, so one bad message cannot poison the state."""
+    checks = {"cameras": dict, "storage": dict, "issues": list, "network": dict, "overlap": dict}
+    if require_cameras and not isinstance(data.get("cameras"), dict):
+        return False
+    return all(isinstance(data[key], kind) for key, kind in checks.items() if key in data)
+
+
 class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
     """Holds the app's status snapshot and fans out pushed events."""
 
@@ -49,6 +57,7 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
         self.latest_events: dict[str, Payload] = {}
         self._event_listeners: set[EventListener] = set()
         self._last_push = 0.0
+        self._force_next = False
         self._ws_task: asyncio.Task[None] | None = None
         self.ws_connected = False
         self.unsafe_handler: Callable[[list[str]], Any] | None = None
@@ -57,11 +66,13 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
 
     async def _async_update_data(self) -> Payload:
         if (
-            self.data is not None
+            not self._force_next
+            and self.data is not None
             and self.ws_connected
             and time.monotonic() - self._last_push < WS_STALE_AFTER
         ):
             return self.data
+        self._force_next = False
         try:
             data = await self.api.async_status()
         except DashcamSyncAuthError as err:
@@ -111,7 +122,10 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
                     self.ws_connected = True
                     delay = 1.0
                     self._last_push = time.monotonic()
-                    self._handle(message)
+                    try:
+                        self._handle(message)
+                    except Exception:  # one malformed message must not end live updates
+                        _LOGGER.exception("Ignoring a malformed push message: %r", message)
             except DashcamSyncAuthError:
                 self.ws_connected = False
                 self.config_entry.async_start_reauth(self.hass)
@@ -128,12 +142,17 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
         data = self.data
         if kind == "snapshot":
             snapshot = {k: v for k, v in message.items() if k not in ("type", "ts")}
+            if not _valid_hub(snapshot, require_cameras=True):
+                _LOGGER.warning("Ignoring a snapshot with an unexpected shape")
+                return
             self.async_set_updated_data(snapshot)
             self.hass.async_create_task(self._async_refresh_latest_events(snapshot))
             return
         if data is None:
             return
         if kind == "camera":
+            if "camera" not in message or not isinstance(message.get("status"), dict):
+                return
             cameras = dict(data.get("cameras", {}))
             cameras[message["camera"]] = message["status"]
             self.async_set_updated_data({**data, "cameras": cameras})
@@ -141,20 +160,25 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
             hub: Payload = {
                 k: message[k] for k in ("storage", "issues", "network", "overlap") if k in message
             }
+            if not _valid_hub(hub):
+                _LOGGER.warning("Ignoring a hub update with an unexpected shape")
+                return
             self.async_set_updated_data({**data, **hub})
         elif kind == "clip":
             clip = message.get("clip")
-            if message.get("event_clip") and clip:
+            if not isinstance(clip, dict) or "camera" not in message:
+                return
+            if message.get("event_clip"):
                 self.latest_events[message["camera"]] = clip
             self._dispatch(message)
-            self.hass.async_create_task(self.async_request_refresh())
+            self.hass.async_create_task(self.async_force_refresh(immediate=False))
         elif kind == "session":
             self._dispatch(message)
         elif kind == "safety":
             unsafe = list(message.get("route_unsafe", []))
             if unsafe and self.unsafe_handler is not None:
                 self.hass.async_create_task(self.unsafe_handler(unsafe))
-            self.hass.async_create_task(self.async_request_refresh())
+            self.hass.async_create_task(self.async_force_refresh(immediate=False))
         elif kind in (
             "overlap",
             "options",
@@ -163,12 +187,20 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
             "clip_keep",
             "clip_deleted",
         ):
-            self.hass.async_create_task(self.async_request_refresh())
+            self.hass.async_create_task(self.async_force_refresh(immediate=False))
 
-    async def async_force_refresh(self) -> None:
-        """Read fresh state even while the socket is live (after our own writes)."""
-        self._last_push = 0.0
-        await self.async_request_refresh()
+    async def async_force_refresh(self, *, immediate: bool = True) -> None:
+        """Read fresh state even while the socket is live.
+
+        After our own writes (``immediate``) this must not wait: the coordinator's
+        debounced ``async_request_refresh`` holds a 10 s cooldown after any refresh,
+        which would leave a switch showing the old value.
+        """
+        self._force_next = True
+        if immediate:
+            await self.async_refresh()
+        else:
+            await self.async_request_refresh()
 
     # ----------------------------------------------------------------- events
 

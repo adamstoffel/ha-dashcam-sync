@@ -115,6 +115,7 @@ class Daemon:
         self.bus = EventBus()
         self.logs = LogRing()
         self.token = ""
+        self.instance_id = ""
         self.session: aiohttp.ClientSession | None = None
         self.catalog: Catalog | None = None
         self.storage: StorageManager | None = None
@@ -157,6 +158,7 @@ class Daemon:
         cfg.data_dir.mkdir(parents=True, exist_ok=True)
         logging.getLogger().addHandler(self.logs)
         self.token = self._load_token()
+        self.instance_id = self._load_instance_id()
         self.session = aiohttp.ClientSession()
         token = os.environ.get("SUPERVISOR_TOKEN", "")
         if cfg.use_supervisor and token:
@@ -267,6 +269,18 @@ class Daemon:
             path.write_text(token, "utf-8")
             path.chmod(0o600)
         return token
+
+    def _load_instance_id(self) -> str:
+        """A stable id for this app instance. It must survive a token rotation."""
+        path = self.config.data_dir / "instance_id"
+        try:
+            value = path.read_text("utf-8").strip()
+        except FileNotFoundError:
+            value = ""
+        if len(value) < 16:
+            value = secrets.token_hex(8)
+            path.write_text(value, "utf-8")
+        return value
 
     async def _announce(self) -> None:
         """Offer ourselves to Core through Supervisor discovery."""

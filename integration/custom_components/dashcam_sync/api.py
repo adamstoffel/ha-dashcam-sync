@@ -31,6 +31,18 @@ class DashcamSyncRequestError(DashcamSyncError):
         self.message = message
 
 
+def _as_dict(body: Any) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise DashcamSyncRequestError(502, "unexpected response from the app")
+    return body
+
+
+def _as_list(body: Any) -> list[dict[str, Any]]:
+    if not isinstance(body, list):
+        raise DashcamSyncRequestError(502, "unexpected response from the app")
+    return body
+
+
 class DashcamSyncApi:
     """Thin async wrapper; every call raises one of the errors above."""
 
@@ -66,6 +78,8 @@ class DashcamSyncApi:
                 if resp.status >= 400:
                     message = body.get("error") if isinstance(body, dict) else None
                     raise DashcamSyncRequestError(resp.status, message or resp.reason or "error")
+                if body is None:
+                    raise DashcamSyncRequestError(502, "the app did not answer with JSON")
                 return body
         except (aiohttp.ClientError, TimeoutError) as err:
             raise DashcamSyncConnectionError(str(err)) from err
@@ -73,31 +87,34 @@ class DashcamSyncApi:
     # ------------------------------------------------------------------ reads
 
     async def async_info(self) -> dict[str, Any]:
-        return dict(await self._request("GET", "info"))
+        return _as_dict(await self._request("GET", "info"))
 
     async def async_status(self) -> dict[str, Any]:
-        return dict(await self._request("GET", "status"))
+        return _as_dict(await self._request("GET", "status"))
 
     async def async_clips(self, **filters: Any) -> list[dict[str, Any]]:
         params = {k: v for k, v in filters.items() if v is not None}
-        return list(await self._request("GET", "clips", params=params))
+        return _as_list(await self._request("GET", "clips", params=params))
 
     async def async_clip(self, clip_id: int) -> dict[str, Any]:
-        return dict(await self._request("GET", f"clips/{clip_id}"))
+        return _as_dict(await self._request("GET", f"clips/{clip_id}"))
 
     async def async_clip_days(self, camera: str) -> list[str]:
-        data = await self._request("GET", "clip-days", params={"camera": camera})
-        return list(data["days"])
+        data = _as_dict(await self._request("GET", "clip-days", params={"camera": camera}))
+        days = data.get("days")
+        if not isinstance(days, list):
+            raise DashcamSyncRequestError(502, "unexpected clip-days response")
+        return [str(d) for d in days]
 
     async def async_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
-        return list(await self._request("GET", "sessions", params={"limit": limit}))
+        return _as_list(await self._request("GET", "sessions", params={"limit": limit}))
 
     async def async_options(self) -> dict[str, Any]:
-        return dict(await self._request("GET", "options"))
+        return _as_dict(await self._request("GET", "options"))
 
     async def async_wifi(self, camera: str) -> dict[str, Any]:
         """Hotspot credentials and the reserved address block for a camera."""
-        return dict(await self._request("GET", f"cameras/{camera}/wifi"))
+        return _as_dict(await self._request("GET", f"cameras/{camera}/wifi"))
 
     # ---------------------------------------------------------------- actions
 
@@ -128,10 +145,10 @@ class DashcamSyncApi:
         await self._request("POST", f"clips/{clip_id}/{'keep' if keep else 'unkeep'}")
 
     async def async_delete(self, clip_id: int) -> dict[str, Any]:
-        return dict(await self._request("DELETE", f"clips/{clip_id}"))
+        return _as_dict(await self._request("DELETE", f"clips/{clip_id}"))
 
     async def async_purge(self, dry_run: bool = False) -> dict[str, Any]:
-        return dict(await self._request("POST", "purge", json={"dry_run": dry_run}))
+        return _as_dict(await self._request("POST", "purge", json={"dry_run": dry_run}))
 
     # -------------------------------------------------------------- websocket
 

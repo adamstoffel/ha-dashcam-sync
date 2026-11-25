@@ -94,7 +94,8 @@
       "overlap_device_in_block": "A device Home Assistant knows has an address inside the camera's block ({block}): {conflicts}. Move it, then try again.",
       "overlap_address_in_use": "Something on your home network answers inside the camera's block ({block}): {conflicts}. Free those addresses, then try again.",
       "overlap_camera_collides": "Something on your home network has exactly the dashcam's address ({conflicts}). See the app's documentation, then try again.",
-      "no_adapter": "Home Assistant has no wireless interface named {interface}. Check the adapter and the interface name in the app."
+      "no_adapter": "Home Assistant has no wireless interface named {interface}. Check the adapter and the interface name in the app.",
+      "overlap_blocked": "The camera's address block ({block}) is not safe to use right now. Check the app's address check, then try again."
     },
     "abort": {
       "no_hotspot_cameras": "No hotspot camera is set up in the app yet.",

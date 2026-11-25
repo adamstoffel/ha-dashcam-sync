@@ -116,11 +116,11 @@ Every claim below is enforced in CI on every push.
 
 | Layer | What it proves | Size |
 | --- | --- | --- |
-| App unit and component tests | Queue order, retention maths, path sanitising, address-block logic, storage health, catalogue, engine state machine | 232 tests, 90 %+ coverage, `ruff`, `mypy --strict` |
+| App unit and component tests | Queue order, retention maths, path sanitising, address-block logic, storage health, catalogue, engine state machine | 233 tests, 90 %+ coverage, `ruff`, `mypy --strict` |
 | Fault injection | A fake camera that drops connections, stalls, lies about lengths, ignores Range, refuses playback or fails to restore: resume, verify and restore always happen, including when the app is cancelled mid-download | part of the above |
 | Property-based fuzzing | Hypothesis tests on the address maths, queue ordering, retention, redaction, local path building and every parser of camera-supplied data (XML, JSON, HTML, mount tables, options) | 13 properties (`DASHCAM_FUZZ=1` runs 3000 examples each nightly) |
 | Driver replay | Every recorded device profile is replayed against every driver: each claims its own family and no other | 4 fixtures |
-| Integration tests | Config, options, reauth and reconfigure flows, every platform, actions, media source, views, diagnostics, repairs, metadata rules | 108 tests, 95 %+ coverage, `ruff`, `mypy --strict` |
+| Integration tests | Config, options, reauth and reconfigure flows, every platform, actions, media source, views, diagnostics, repairs, metadata rules | 120 tests, 95 %+ coverage, `ruff`, `mypy --strict` |
 | Real-stack end to end | Fake camera → **real app daemon** → **real integration inside Home Assistant**, nothing mocked in between | 8 tests |
 | Browser tests | Playwright drives the panel: clips list, thumbnails decode, video plays, Keep toggles, retention dry run, the wizard detects the driver; fails on any console error or failed request | 1 script, screenshots as artifacts |
 | Packaging | Manifest, schema, translations, s6 services, AppArmor, security-rating arithmetic, hashed requirements | in the app tests |

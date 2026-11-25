@@ -36,7 +36,7 @@ from .coordinator import DashcamSyncConfigEntry, DashcamSyncCoordinator, Dashcam
 from .issues import IssueSync
 from .services import async_setup_services
 from .views import ClipFileView, ClipThumbView
-from .wifi import WifiUnavailable, async_announced_wifi_adapters, async_disconnect
+from .wifi import async_announced_wifi_adapters, async_disconnect
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry) 
             try:
                 wifi = await api.async_wifi(camera_id)
                 await async_disconnect(hass, str(wifi["interface"]))
-            except (DashcamSyncError, WifiUnavailable) as err:
+            except Exception as err:  # keep going: the remaining cameras still need disconnecting
                 _LOGGER.warning("Could not disconnect the Wi-Fi for %s: %s", camera_id, err)
 
     coordinator.unsafe_handler = _disconnect_unsafe
@@ -169,8 +169,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry)
 async def async_remove_config_entry_device(
     hass: HomeAssistant, entry: DashcamSyncConfigEntry, device_entry: Any
 ) -> bool:
-    """A camera device can be removed once the app no longer lists the camera."""
+    """A camera device can be removed once the app no longer lists it; the hub never can."""
     cameras = entry.runtime_data.coordinator.hub.get("cameras", {})
     return not any(
-        domain == DOMAIN and ident in cameras for domain, ident in device_entry.identifiers
+        domain == DOMAIN and (ident in cameras or ident == entry.entry_id)
+        for domain, ident in device_entry.identifiers
     )

@@ -26,5 +26,12 @@ First version. See `app/dashcam_sync/CHANGELOG.md` for the app side.
   - `PATCH /cameras/{id}` accepted invalid values that made the camera vanish on reload;
   - mount probes ran on the event loop, so a hung share could freeze the API and every download;
   - the panel's camera selector sent you to the Overview.
+- Integration fixes from review and end-to-end testing, each with a regression test:
+  - switch, select and button changes could be delayed up to 10 s by the coordinator's refresh debounce (writes now refresh immediately);
+  - events pushed by the app were answered from a stale cache instead of refreshing;
+  - one malformed push message (or a malformed snapshot) could end live updates or poison the state: messages and snapshots are shape-checked;
+  - the app's instance id is no longer derived from the API token, so rotating the token no longer breaks *Reconfigure* or creates a duplicate entry;
+  - non-JSON or wrongly shaped API responses now fail cleanly (setup retries instead of failing);
+  - the arrival-hint entity can be cleared again; the Wi-Fi kill switch carries on after one camera fails; the hub device cannot be deleted from the UI; network-storage entities appear when a share is added after setup; image paths are resolved off the event loop.
 - Hardening: the wizard refuses public, loopback and Home Assistant-internal hosts; option edits are serialised.
 - Push updates over a WebSocket with a 30 s poll as the fallback.

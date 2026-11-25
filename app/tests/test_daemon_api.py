@@ -723,3 +723,26 @@ async def test_overlap_check_is_refused_for_lan_cameras(stack: Stack) -> None:
     status, body = await stack.post("/api/v1/cameras/car/overlap", {})
     assert status == 400 and "hotspot" in body["error"]
     assert (await stack.get("/api/v1/cameras/car/overlap"))[0] == 400
+
+
+async def test_the_instance_id_is_stable_and_independent_of_the_token(tmp_path: Path) -> None:
+    def config(token: str) -> DaemonConfig:
+        return DaemonConfig(
+            data_dir=tmp_path / "d", media_root=tmp_path, share_root=tmp_path, api_port=0, ui_port=0,
+            bind_host="127.0.0.1", use_supervisor=False, api_token=token,
+        )  # fmt: skip
+
+    ids = []
+    for token in ("a" * 40, "b" * 40):  # the token is rotated between runs
+        daemon = Daemon(config(token))
+        await daemon.start()
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.get(
+                    f"http://127.0.0.1:{daemon.bound_port(0)}/api/v1/info",
+                    headers={"Authorization": f"Bearer {token}"},
+                ) as r:
+                    ids.append((await r.json())["instance"])
+        finally:
+            await daemon.stop()
+    assert ids[0] == ids[1] and len(ids[0]) == 16 and not set(ids[0]) & set("xyz")

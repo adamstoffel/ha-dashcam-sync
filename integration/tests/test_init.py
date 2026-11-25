@@ -202,7 +202,9 @@ async def test_a_camera_that_vanishes_is_unavailable_and_its_device_removable(
     assert device is not None
     assert await async_remove_config_entry_device(hass, loaded, device)
     hub = dev_reg.async_get_device(identifiers={(DOMAIN, loaded.entry_id)})
-    assert hub is not None and await async_remove_config_entry_device(hass, loaded, hub)
+    assert hub is not None and not await async_remove_config_entry_device(
+        hass, loaded, hub
+    )  # never the hub
 
 
 async def test_push_updates_state_without_polling(

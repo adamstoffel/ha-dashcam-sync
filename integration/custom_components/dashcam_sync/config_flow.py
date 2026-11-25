@@ -85,6 +85,13 @@ async def _validate(
     return info, None
 
 
+KNOWN_OVERLAP_ERRORS = {"device_in_block", "address_in_use", "camera_collides"}
+
+
+def _overlap_error(result: Any) -> str:
+    return f"overlap_{result}" if result in KNOWN_OVERLAP_ERRORS else "overlap_blocked"
+
+
 class DashcamSyncConfigFlow(ConfigFlow, domain=DOMAIN):
     """Set up the integration for the Dashcam Sync app."""
 
@@ -220,7 +227,12 @@ class DashcamSyncOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
-            return self.async_create_entry(data={**self.config_entry.options, **user_input})
+            options = {
+                k: v for k, v in self.config_entry.options.items() if k != CONF_PRESENCE_ENTITY
+            }
+            return self.async_create_entry(
+                data={**options, **user_input}
+            )  # an emptied field clears it
         schema = vol.Schema(
             {
                 vol.Optional(CONF_PRESENCE_ENTITY): selector.EntitySelector(
@@ -276,7 +288,7 @@ class DashcamSyncOptionsFlow(OptionsFlow):
             # Never connect and hope: a failed check blocks the camera.
             return self.async_show_form(
                 step_id="wifi_apply",
-                errors={"base": f"overlap_{report['result']}"},
+                errors={"base": _overlap_error(report.get("result"))},
                 description_placeholders=placeholders,
             )
         try:

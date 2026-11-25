@@ -58,7 +58,7 @@ class LatestEventImage(DashcamSyncEntity, ImageEntity):
         clip = self._clip
         if clip is None or not clip.get("thumbnail"):
             return None
-        path = resolve_clip_path(clip["thumbnail"])
+        path = await self.hass.async_add_executor_job(resolve_clip_path, clip["thumbnail"])
         if path is None:
             return None
         return await self.hass.async_add_executor_job(Path.read_bytes, path)
