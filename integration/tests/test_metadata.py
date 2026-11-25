@@ -24,7 +24,9 @@ def test_manifest_has_what_the_catalog_requires() -> None:
     assert MANIFEST["iot_class"] == "local_push" and MANIFEST["config_flow"] is True
     assert re.match(r"^\d{4}\.\d{1,2}\.\d+$", MANIFEST["version"])
     assert MANIFEST["codeowners"][0].startswith("@")
-    assert list(MANIFEST) == sorted(MANIFEST, key=lambda k: (k not in ("domain", "name"), k))  # hassfest order
+    assert list(MANIFEST) == sorted(
+        MANIFEST, key=lambda k: (k not in ("domain", "name"), k)
+    )  # hassfest order
 
 
 def test_version_matches_the_app() -> None:
@@ -58,8 +60,12 @@ def test_every_entity_has_a_name_and_an_icon() -> None:
     for platform, items in keys.items():
         assert items <= set(icons[platform]), (platform, items - set(icons[platform]))
     # Every translation_key used in the code exists in the strings.
-    used = set(re.findall(r'(?:super\(\).__init__\(coordinator, |DashcamSyncEntity.__init__\(\s*self,\s*coordinator,\s*)"(\w+)"', "".join(
-        p.read_text() for p in INTEGRATION.glob("*.py"))))
+    used = set(
+        re.findall(
+            r'(?:super\(\).__init__\(coordinator, |DashcamSyncEntity.__init__\(\s*self,\s*coordinator,\s*)"(\w+)"',
+            "".join(p.read_text() for p in INTEGRATION.glob("*.py")),
+        )
+    )
     known = {k for items in keys.values() for k in items}
     assert used <= known, used - known
 
@@ -99,13 +105,15 @@ def test_blueprint_is_importable() -> None:
         pass
 
     Loader.add_constructor("!input", lambda loader, node: f"INPUT:{loader.construct_scalar(node)}")
-    blueprint = yaml.load(  # noqa: S506
+    blueprint = yaml.load(
         (ROOT / "blueprints/automation/dashcam_sync/notify_event_clip.yaml").read_text(), Loader
     )
     meta = blueprint["blueprint"]
     assert meta["domain"] == "automation" and meta["source_url"].startswith("https://")
     declared = set(meta["input"])
-    used = {v.removeprefix("INPUT:") for v in json.dumps(blueprint).split('"') if v.startswith("INPUT:")}
+    used = {
+        v.removeprefix("INPUT:") for v in json.dumps(blueprint).split('"') if v.startswith("INPUT:")
+    }
     assert used <= declared, used - declared
     assert (blueprint["triggers"][0]["to"]) == "event_clip"
 

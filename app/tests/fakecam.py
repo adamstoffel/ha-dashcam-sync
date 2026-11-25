@@ -93,16 +93,16 @@ class FakeCamera:
 
     # --------------------------------------------------------------- server
 
-    async def start(self) -> str:
+    async def start(self, port: int = 0) -> str:
         app = web.Application(middlewares=[self._track])
         app.router.add_route("*", "/{tail:.*}", self._dispatch)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
-        site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        site = web.TCPSite(self._runner, "127.0.0.1", port)
         await site.start()
         assert site._server is not None and site._server.sockets
-        port = site._server.sockets[0].getsockname()[1]
-        self.host = f"127.0.0.1:{port}"
+        bound = site._server.sockets[0].getsockname()[1]
+        self.host = f"127.0.0.1:{bound}"
         return self.host
 
     async def stop(self) -> None:

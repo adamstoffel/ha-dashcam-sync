@@ -1,0 +1,24 @@
+name: Unsupported camera
+description: The app says "Unsupported" for my dashcam
+labels: [driver, unsupported-camera]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        In the Dashcam Sync panel open **Cameras › Capture device profile** while connected to the camera. The capture is read-only and redacted (SSIDs, passwords, MAC addresses and other IPs are removed). A contributor turns it into a test fixture and writes the driver.
+  - type: input
+    id: camera
+    attributes:
+      label: Camera brand and model
+    validations: { required: true }
+  - type: input
+    id: how
+    attributes:
+      label: How does the phone app connect to it? (hotspot SSID prefix, app name)
+  - type: textarea
+    id: profile
+    attributes:
+      label: Device profile
+      description: Paste the JSON, or attach it as a file.
+      render: json
+    validations: { required: true }

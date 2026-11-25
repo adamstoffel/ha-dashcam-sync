@@ -1,0 +1,62 @@
+name: Nightly
+
+# Catch breaking changes in Home Assistant and the Supervisor before a release.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration-ha-channels:
+    name: Integration vs Home Assistant ${{ matrix.channel }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [beta, dev]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0
+      - name: Install Home Assistant ${{ matrix.channel }}
+        run: |
+          pip install --pre -U pytest-homeassistant-custom-component pytest-cov PyTurboJPEG av numpy ruff
+          if [ "${{ matrix.channel }}" = "dev" ]; then
+            pip install -U "git+https://github.com/home-assistant/core.git@dev"
+          else
+            pip install --pre -U homeassistant
+          fi
+      - name: Tests
+        working-directory: integration
+        run: pytest --no-cov
+
+  app-latest-dependencies:
+    name: App with the newest dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pip install -U -e "app[dev]"
+      - working-directory: app
+        run: |
+          mypy
+          pytest --no-cov
+
+  supervisor-roles:
+    name: The default role still reaches what the app uses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python scripts/check_supervisor_roles.py

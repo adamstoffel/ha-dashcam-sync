@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: App (ruff, mypy --strict, pytest, 90% coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: app/pyproject.toml
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: pip install -e "app[dev]"
+      - name: Lint
+        working-directory: app
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Types
+        working-directory: app
+        run: mypy
+      - name: Tests
+        working-directory: app
+        run: pytest --cov
+
+  integration:
+    name: Integration (ruff, pytest, 95% coverage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: integration/requirements_test.txt
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0
+      - run: pip install -r integration/requirements_test.txt PyTurboJPEG av numpy
+      - name: Lint
+        working-directory: integration
+        run: |
+          ruff check .
+          ruff format --check .
+      - name: Tests
+        working-directory: integration
+        run: pytest --cov
+
+  docker:
+    name: App image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: app/dashcam_sync/Dockerfile
+          failure-threshold: error
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: app/dashcam_sync
+          push: false
+          load: true
+          tags: dashcam-sync-app:ci
+      - name: Smoke test the image
+        run: docker run --rm --entrypoint python3 dashcam-sync-app:ci -c "import dashcam_sync, shutil; print(dashcam_sync.__version__, shutil.which('ffmpeg'))"
+
+  catalog-checks:
+    name: hassfest and HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The monorepo keeps the integration under integration/; the checks expect the
+      # layout of the release repository, so stage it at the workspace root.
+      - name: Stage the integration repository layout
+        run: |
+          cp -r integration/custom_components ./custom_components
+          cp integration/hacs.json ./hacs.json
+      - uses: home-assistant/actions/hassfest@master
+      - uses: hacs/action@main
+        with:
+          category: integration
+
+  release-metadata:
+    name: Versions agree, scripts work
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install pytest
+      - run: python scripts/check_versions.py
+      - name: Release scripts
+        run: pytest scripts -q
