@@ -925,3 +925,97 @@ async def test_an_options_change_cancels_a_running_move(stack: Stack) -> None:
 async def test_the_storage_payload_reports_the_move(stack: Stack) -> None:
     _, storage = await stack.get("/api/v1/storage")
     assert storage["migration"]["status"] == "idle"
+
+
+# -------------------------------------------------------------- hotspot join from the panel
+
+
+async def _hotspot(stack: Stack) -> None:
+    body = {"id": "hot", "name": "Hot", "connection": "hotspot", "interface": "wlan0",
+            "ssid": "CAM", "wifi_password": "pw-1", "host": "127.0.0.1:9", "driver": "auto",
+            "enabled": True}  # fmt: skip
+    status, _ = await stack.post("/api/v1/wizard/camera", body)
+    assert status == 200
+
+
+async def test_joining_without_the_integration_falls_back_to_manual_steps(stack: Stack) -> None:
+    await _hotspot(stack)
+    status, join = await stack.post("/api/v1/cameras/hot/join")
+    assert status == 200 and join["state"] == "manual"
+    assert join["reason"] == "integration_not_connected"
+    profile = join["profile"]
+    assert profile["ssid"] == "CAM" and profile["interface"] == "wlan0"
+    assert profile["address"].endswith("/30") and profile["gateway"] is None
+    assert "pw-1" not in json.dumps(join)  # the password is never part of the profile
+
+
+async def test_a_join_request_reaches_the_integration_and_its_answer_is_shown(
+    stack: Stack,
+) -> None:
+    await _hotspot(stack)
+    events = stack.daemon.bus.subscribe()  # stands in for the integration's socket
+    _, join = await stack.post("/api/v1/cameras/hot/join")
+    assert join["state"] == "requested"
+    sent = [events.get_nowait() for _ in range(events.qsize())]
+    assert {"type": "join_wifi", "camera": "hot"}.items() <= next(
+        e for e in sent if e["type"] == "join_wifi"
+    ).items()
+    status, _ = await stack.post(
+        "/api/v1/cameras/hot/join-result", {"state": "failed", "reason": "no_adapter: wlan0"}
+    )
+    assert status == 200
+    _, now = await stack.get("/api/v1/cameras/hot/join")
+    assert now["state"] == "failed" and now["reason"] == "no_adapter: wlan0"
+    status, err = await stack.post("/api/v1/cameras/hot/join-result", {"state": "bogus"})
+    assert status == 400
+
+
+async def test_an_unanswered_join_request_turns_manual(
+    stack: Stack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _hotspot(stack)
+    stack.daemon.bus.subscribe()
+    await stack.post("/api/v1/cameras/hot/join")
+    monkeypatch.setattr(daemon_mod, "JOIN_TIMEOUT", -1)
+    _, now = await stack.get("/api/v1/cameras/hot/join")
+    assert now["state"] == "manual" and now["reason"] == "no_answer"
+
+
+async def test_join_results_are_refused_on_the_ingress_port(stack: Stack) -> None:
+    await _hotspot(stack)
+    async with stack.http.post(
+        f"{stack.ui}/api/v1/cameras/hot/join-result", json={"state": "joined"}
+    ) as r:
+        assert r.status == 403
+
+
+async def test_a_lan_camera_cannot_be_joined(stack: Stack) -> None:
+    status, _ = await stack.post("/api/v1/cameras/car/join")
+    assert status == 400
+
+
+async def test_editing_a_camera_without_the_password_keeps_it(stack: Stack) -> None:
+    await _hotspot(stack)
+    body = {"id": "hot", "name": "Hot 2", "connection": "hotspot", "interface": "wlan0",
+            "ssid": "CAM2", "wifi_password": "", "driver": "auto", "enabled": True}  # fmt: skip
+    status, _ = await stack.post("/api/v1/wizard/camera", body)
+    assert status == 200
+    cam = stack.daemon.options.camera("hot")
+    assert cam is not None and cam.ssid == "CAM2" and cam.wifi_password == "pw-1"
+
+
+async def test_wifi_interfaces_are_listed_for_the_wizard(stack: Stack) -> None:
+    from dashcam_sync.network import Interface
+
+    stack.daemon.network.interfaces = [
+        Interface("enp2s0", "ethernet", True, True, True),
+        Interface("wlp4s0", "wireless", True, False, False),
+    ]
+    await _hotspot(stack)
+    stack.daemon.network.interfaces.append(
+        Interface("wlan0", "wireless", True, True, False, ssid="CAM")
+    )
+    _, r = await stack.get("/api/v1/wizard/interfaces")
+    names = {i["name"]: i for i in r["wireless"]}
+    assert set(names) == {"wlp4s0", "wlan0"}  # the wired interface is not offered
+    assert names["wlan0"]["in_use_by"] == "hot" and names["wlp4s0"]["in_use_by"] is None

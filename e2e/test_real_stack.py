@@ -258,3 +258,56 @@ async def test_app_issues_become_repairs(hass: HomeAssistant, stack: Stack) -> N
             is not None
         ),
     )
+
+
+async def test_the_panel_asks_home_assistant_to_join_a_hotspot(
+    hass: HomeAssistant, stack: Stack
+) -> None:
+    """Panel → app → push → integration joins (Supervisor stubbed) → result → panel."""
+    from unittest.mock import AsyncMock
+
+    from custom_components.dashcam_sync.wifi import WifiInterface
+
+    await synced(hass, stack)
+    await wait_for(hass, lambda: stack.entry.runtime_data.coordinator.ws_connected)
+
+    def add(raw: dict) -> None:
+        raw["cameras"].append(
+            {"id": "hot", "name": "Hot", "connection": "hotspot", "interface": "wlan0",
+             "ssid": "CARDV", "wifi_password": "pw", "host": "127.0.0.1:9",
+             "driver": "auto", "enabled": True}  # fmt: skip
+        )
+
+    await stack.daemon.update_raw_options(add)
+    cam = stack.daemon.options.camera("hot")
+    assert cam is not None
+    apply = AsyncMock()
+    adapters = [WifiInterface("wlan0", False, True, None)]
+    W = "custom_components.dashcam_sync.wifi"
+
+    async def ask() -> dict:
+        assert stack.daemon.request_join(cam)["state"] == "requested"  # type: ignore[arg-type]
+        await wait_for(hass, lambda: stack.daemon.joins["hot"]["state"] != "requested")
+        return stack.daemon.joins["hot"]
+
+    with (
+        patch(f"{W}.async_list_wifi_interfaces", return_value=adapters),
+        patch(f"{W}.async_apply_profile", apply),
+    ):
+        # The real address check: 127.0.0.1 collides with this machine, so no join.
+        refused = await ask()
+        assert refused["state"] == "failed" and refused["reason"] == "camera_collides"
+        apply.assert_not_awaited()
+
+        # A camera whose block is free (the live address probe is stubbed: it depends
+        # on the network the tests run on) is joined, and the panel sees it.
+        from dashcam_sync.netblock import OverlapReport
+
+        async def free(camera_id: str, **_kw: object) -> OverlapReport:
+            return OverlapReport("no_overlap", stack.daemon.block_for(cam))
+
+        with patch.object(stack.daemon, "run_overlap_check", free):
+            joined = await ask()
+    assert joined["state"] == "joined", joined
+    profile = apply.await_args.args[1]
+    assert profile.ssid == "CARDV" and profile.password == "pw" and profile.prefix == 30

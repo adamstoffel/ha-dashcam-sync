@@ -60,6 +60,7 @@ from .supervisor import (
 _LOGGER = logging.getLogger(__name__)
 
 MIN_TOKEN_LENGTH = 32
+JOIN_TIMEOUT = 45.0  # seconds to wait for Home Assistant to answer a join request
 
 NETWORK_POLL = 15.0
 NETWORK_POLL_JOINED = 5.0
@@ -141,6 +142,8 @@ class Daemon:
         # deletes, and the clip mover (per clip). Never held across an await.
         self.files_lock = threading.Lock()
         self.migration = Migration()
+        # Hotspot joins asked for from the panel; Home Assistant (the integration) does them.
+        self.joins: dict[str, dict[str, Any]] = {}
         self._runners: list[web.AppRunner] = []
         self._options_mtime = 0.0
         self._stop = asyncio.Event()
@@ -534,6 +537,55 @@ class Daemon:
                 return retention.delete_clip_everywhere(clip_id)
 
         return await asyncio.to_thread(delete)
+
+    # ------------------------------------------------------------ Wi-Fi join
+
+    def join_profile(self, cam: CameraOptions) -> dict[str, Any]:
+        """The Wi-Fi profile Home Assistant needs for a hotspot camera (no password)."""
+        out: dict[str, Any] = {
+            "interface": cam.interface,
+            "ssid": cam.ssid,
+            "ipv4": cam.effective_ipv4,
+            "gateway": None,
+            "dns": None,
+            "ipv6": "disabled",
+        }
+        try:
+            block = self.block_for(cam)
+        except ConfigError:
+            return out
+        out.update(
+            address=block.static_address,
+            block=str(block.network),
+            camera=str(block.camera),
+        )
+        return out
+
+    def request_join(self, cam: CameraOptions) -> dict[str, Any]:
+        """Ask Home Assistant to join a camera hotspot; it answers with ``set_join_result``."""
+        state: dict[str, Any]
+        if self.bus.subscribers == 0:
+            state = {"state": "manual", "reason": "integration_not_connected"}
+        else:
+            state = {"state": "requested", "reason": None}
+            self.bus.publish("join_wifi", camera=cam.id)
+        self.joins[cam.id] = {**state, "ts": time.time()}
+        return self.join_status(cam)
+
+    def set_join_result(self, camera_id: str, state: str, reason: str | None) -> None:
+        self.joins[camera_id] = {"state": state, "reason": reason, "ts": time.time()}
+
+    def join_status(self, cam: CameraOptions) -> dict[str, Any]:
+        join = dict(self.joins.get(cam.id) or {"state": "idle", "reason": None, "ts": None})
+        if join["state"] == "requested" and time.time() - (join["ts"] or 0) > JOIN_TIMEOUT:
+            join = {"state": "manual", "reason": "no_answer", "ts": join["ts"]}
+            self.joins[cam.id] = join
+        worker = self.workers.get(cam.id)
+        return {
+            **join,
+            "camera_connected": bool(worker and worker.status.connected),
+            "profile": self.join_profile(cam),
+        }
 
     # ----------------------------------------------------------- moving clips
 

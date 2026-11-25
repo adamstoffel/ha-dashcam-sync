@@ -25,3 +25,11 @@ pre { background:var(--card); border:1px solid var(--line); border-radius:8px; p
 .notice { border-left:4px solid var(--warn); }
 .notice.bad { border-color:var(--bad); }
 video { max-width:100%; border-radius:6px; background:#000; }
+.steps { display:flex; flex-wrap:wrap; gap:6px 16px; margin:4px 0 12px; font-size:13px; opacity:.8; }
+.steps span.on { font-weight:600; color:var(--accent); opacity:1; } .steps span.done { opacity:.6; }
+label.choice { display:block; font-size:inherit; opacity:1; margin:8px 0; cursor:pointer; }
+table.kv td { padding:3px 10px 3px 0; vertical-align:middle; } table.kv code { font-size:13px; }
+.bad-text { color:var(--bad); }
+details.more { display:inline-block; position:relative; } details.more > summary { display:inline-block; cursor:pointer; padding:6px 10px; border:1px solid var(--line); border-radius:6px; list-style:none; }
+details.more[open] > summary { background:var(--line); } details.more > button { margin:4px 0 0 4px; }
+details#w-adv { margin-top:12px; } details#w-adv > summary { cursor:pointer; opacity:.8; }

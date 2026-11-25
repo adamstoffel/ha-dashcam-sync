@@ -196,3 +196,33 @@ def known_device_ips(hass: HomeAssistant) -> list[str]:
             continue
         consider(entry.data.get("host"))
     return sorted(found)
+
+
+async def async_join_camera(
+    hass: HomeAssistant, api: Any, camera_id: str
+) -> tuple[str, str | None]:
+    """Join a hotspot camera's Wi-Fi when the panel asks; returns ``(state, reason)``.
+
+    The same checks as the options flow: the address block must be free, the adapter must
+    exist, and anything the Supervisor client cannot do falls back to manual setup.
+    """
+    from .api import DashcamSyncError  # local import keeps this module free of the client
+
+    try:
+        profile = profile_from_api(await api.async_wifi(camera_id))
+        report = await api.async_overlap(camera_id, known_device_ips(hass))
+    except (DashcamSyncError, KeyError, ValueError) as err:
+        return "failed", f"app_unavailable: {err}"
+    if report.get("blocked"):
+        return "failed", str(report.get("result") or "address_in_use")
+    try:
+        adapters = await async_list_wifi_interfaces(hass)
+    except WifiUnavailable as err:
+        return "manual", str(err)
+    if profile.interface not in {a.name for a in adapters}:
+        return "failed", f"no_adapter: {profile.interface}"
+    try:
+        await async_apply_profile(hass, profile)
+    except WifiUnavailable as err:
+        return "manual", str(err)
+    return "joined", None

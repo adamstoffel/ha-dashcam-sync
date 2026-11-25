@@ -36,7 +36,7 @@ from .coordinator import DashcamSyncConfigEntry, DashcamSyncCoordinator, Dashcam
 from .issues import IssueSync
 from .services import async_setup_services
 from .views import ClipFileView, ClipThumbView
-from .wifi import async_announced_wifi_adapters, async_disconnect
+from .wifi import async_announced_wifi_adapters, async_disconnect, async_join_camera
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -123,6 +123,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry) 
                 _LOGGER.warning("Could not disconnect the Wi-Fi for %s: %s", camera_id, err)
 
     coordinator.unsafe_handler = _disconnect_unsafe
+
+    async def _join(camera_id: str) -> None:
+        """The panel asked to join a hotspot camera: do it and report back."""
+        state, reason = await async_join_camera(hass, api, camera_id)
+        _LOGGER.info("Joining the Wi-Fi for %s: %s %s", camera_id, state, reason or "")
+        try:
+            await api.async_join_result(camera_id, state, reason)
+        except Exception as err:  # the panel times out and shows the manual steps
+            _LOGGER.warning("Could not report the Wi-Fi join for %s: %s", camera_id, err)
+
+    coordinator.join_handler = _join
 
     presence = entry.options.get(CONF_PRESENCE_ENTITY)
     if presence:

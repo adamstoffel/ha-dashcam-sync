@@ -63,6 +63,7 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
         self._ws_task: asyncio.Task[None] | None = None
         self.ws_connected = False
         self.unsafe_handler: Callable[[list[str]], Any] | None = None
+        self.join_handler: Callable[[str], Any] | None = None
 
     # ---------------------------------------------------------------- polling
 
@@ -216,6 +217,10 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
             if unsafe and self.unsafe_handler is not None:
                 self.hass.async_create_task(self.unsafe_handler(unsafe))
             self.hass.async_create_task(self.async_force_refresh(immediate=False))
+        elif kind == "join_wifi":
+            camera = message.get("camera")
+            if isinstance(camera, str) and self.join_handler is not None:
+                self.hass.async_create_task(self.join_handler(camera))
         elif kind in (
             "overlap",
             "options",

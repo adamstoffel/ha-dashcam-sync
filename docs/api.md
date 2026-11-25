@@ -28,6 +28,7 @@ Push messages (`{"type": ..., "ts": ..., "rev": ...}`):
 | `session` | `camera`, `result` (`sync_completed` or `sync_failed`), `clips`, `bytes` or `reason`, `error` | A sync session ended. |
 | `safety` | `route_unsafe` (camera ids) | The default route moved onto a hotspot interface: disconnect the Wi-Fi. |
 | `overlap` | `camera`, `report` | The address-block check result changed. |
+| `join_wifi` | `camera` | The panel asked Home Assistant to join this hotspot camera's Wi-Fi; the integration answers with `POST /cameras/{id}/join-result`. |
 | `migration` | the `job` fields of `GET /storage/migration` | Progress of a clip move, once per clip and at the end. |
 | `options`, `purge_completed`, `issue`, `clip_keep`, `clip_deleted` | varies | Things the integration should re-read. |
 
@@ -74,6 +75,10 @@ Push messages (`{"type": ..., "ts": ..., "rev": ...}`):
 | `GET /wizard/wifi-scan?interface=wlan0` | Wi-Fi scan; `available: false` when the default role may not scan (type the SSID instead). |
 | `POST /wizard/probe` | Detect the driver at `{"host": ..., "driver": "auto"}`. |
 | `POST /wizard/block` | Compute the reserved block for `{"camera_ip": ...}`. |
+| `GET /wizard/interfaces` | Wi-Fi interfaces Home Assistant reports (`name`, `enabled`, `connected`, `ssid`, `signal`, `in_use_by`), for choosing a hotspot camera's adapter. |
+| `POST /cameras/{id}/join` | Ask Home Assistant to join this hotspot camera's Wi-Fi. Sends a `join_wifi` push to the integration; if none is connected the answer is `manual` straight away. |
+| `GET /cameras/{id}/join` | Join progress: `state` (`idle`, `requested`, `joined`, `failed`, `manual`), `reason`, `camera_connected`, and `profile`: the exact values for Settings › System › Network (no password). A request with no answer within 45 s turns `manual`. |
+| `POST /cameras/{id}/join-result` | The integration reports the outcome (`state`, `reason`). Token port only. |
 | `GET /wizard/storage-test` | Mount health of the configured targets. |
 | `POST /wizard/camera` | Validate and save a camera entry (computes `static_address` for hotspot cameras). |
 | `POST /wizard/capture-profile` | A redacted, read-only profile of an unsupported camera. |

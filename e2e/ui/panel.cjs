@@ -114,17 +114,62 @@ async function waitFor(fn, what, timeout = 30000) {
     const res = await ctx.request.get(PANEL + `api/v1/clips/${firstId}/file`);
     assert.equal(res.status(), 200);
 
-    // ---- Cameras + the setup wizard probing the fake camera.
+    // ---- Cameras + the setup wizard (local network camera, detected for real).
     await page.click("nav a[href='#cameras']");
     await page.waitForSelector("button:text('Add camera')");
     assert.equal(await page.locator("button:text('Network check')").count(), 0, "LAN cameras have no address block to check");
+    const camPort = await page.evaluate(async () => { const r = await (await fetch("api/v1/cameras")).json(); return r[0].options.host.split(":")[1]; });
     await page.click("#add");
-    await page.fill("#w-name", "Garage cam");
-    await page.selectOption("#w-conn", "lan");
-    await page.fill("#w-host", "127.0.0.1:" + (await page.evaluate(async () => { const r = await (await fetch("api/v1/cameras")).json(); return r[0].options.host.split(":")[1]; })));
+    await page.check("input[name=w-conn][value=lan]");
+    await page.click("#w-next");
+    await page.fill("#w-host", "127.0.0.1:" + camPort);
     await page.click("#w-probe");
-    await waitFor(async () => /Detected a novatek camera/.test(await page.locator("#w-out").innerText().catch(() => "")), "the wizard to detect the driver");
-    assert.match(await page.locator("#w-out").innerText(), /Reserved address block/);
+    await waitFor(async () => /Detected a novatek camera/.test(await page.locator("#w-det").innerText().catch(() => "")), "the wizard to detect the driver");
+    await page.click("#w-next");
+    await page.fill("#w-name", "Garage cam");
+    assert.equal(await page.locator("#w-adv input[disabled]").inputValue(), "garage_cam", "the ID follows the name");
+    await page.click("#w-next");
+    await page.waitForSelector("#w-done");
+    assert.match(await page.locator("#w-connect").innerText(), /Detected a novatek camera/);
+    await shot("cameras-wizard");
+    await page.click("#w-done");
+    await waitFor(async () => /Garage cam/.test(await page.locator("main").innerText()), "the new camera to be listed");
+    assert.match(await page.locator("main").innerText(), /Local network · 127\.0\.0\.1:\d+/);
+
+    // A hotspot camera: no Home Assistant to ask here, so the exact profile is shown.
+    await page.click("#add");
+    await page.click("#w-next");  // Camera hotspot is the default
+    await page.fill("#w-if", "wlan9");
+    await page.fill("#w-ssid", "CARDV-1234");
+    await page.fill("#w-pass", "secret-pass");
+    await page.click("#w-next");
+    await page.fill("#w-name", "Hotspot cam");
+    await page.click("#w-adv summary");
+    await page.fill("#w-adv #w-host", "127.0.0.1:9");  // a closed port: nothing answers there
+    await page.click("#w-next");
+    await page.waitForSelector("#w-connect table.kv", { timeout: 8000 }).catch(async (e) => {
+      throw new Error(e.message + "\nwizard shows: " + (await page.locator("#wizard").innerText()));
+    });
+    const manualText = await page.locator("#w-connect").innerText();
+    assert.match(manualText, /integration is not connected/);
+    assert.match(manualText, /CARDV-1234/);
+    assert.match(manualText, /Static · \d+\.\d+\.\d+\.\d+\/30/);
+    assert.ok(!/secret-pass/.test(manualText), "the password is never shown");
+    await shot("cameras-hotspot-manual");
+    await page.click("#w-close");
+    await waitFor(async () => /Camera hotspot · wlan9 · CARDV-1234/.test(await page.locator("main").innerText()), "the hotspot camera to be listed");
+
+    // Editing keeps the stored password when it is left blank.
+    const hot = page.locator("main .card[data-id=hotspot_cam]");
+    await hot.locator("button:text('Edit')").click();
+    await page.fill("#w-ssid", "CARDV-5678");
+    await page.click("#w-next");
+    await page.click("#w-next");
+    await page.waitForSelector("#w-connect table.kv");
+    await page.click("#w-close");
+    const stored = await page.evaluate(async () => (await (await fetch("api/v1/cameras/hotspot_cam")).json()).options);
+    assert.equal(stored.ssid, "CARDV-5678");
+    assert.equal(stored.wifi_password, "********", "the password was kept, not cleared");
     await shot("cameras");
 
     // ---- Logs.

@@ -172,7 +172,7 @@ async def websocket(request: web.Request) -> web.StreamResponse:
 def _redacted_camera(cam: CameraOptions, expose: bool) -> dict[str, Any]:
     data = cam.model_dump()
     if not expose:
-        data["wifi_password"] = "********" if cam.wifi_password else None
+        data["wifi_password"] = MASK if cam.wifi_password else None
     return data
 
 
@@ -444,6 +444,7 @@ async def storage(request: web.Request) -> web.Response:
     return web.json_response(await asyncio.to_thread(_daemon(request).storage_payload))
 
 
+MASK = "********"
 LOCATION_FIELDS = ("target", "local_folder", "network_folder")
 
 
@@ -627,9 +628,73 @@ async def wizard_storage_test(request: web.Request) -> web.Response:
     )
 
 
+JOIN_STATES = ("joined", "failed", "manual")
+
+
+async def wizard_interfaces(request: web.Request) -> web.Response:
+    """Wi-Fi interfaces Home Assistant reports, for the hotspot camera's adapter choice."""
+    d = _daemon(request)
+    return web.json_response(
+        {
+            "known": d.network.known,
+            "error": d.network.error,
+            "wireless": [
+                {
+                    "name": i.name,
+                    "enabled": i.enabled,
+                    "connected": i.connected,
+                    "ssid": i.ssid,
+                    "signal": i.signal,
+                    "in_use_by": next(
+                        (
+                            c.id
+                            for c in d.options.cameras
+                            if c.connection == "hotspot" and c.interface == i.name
+                        ),
+                        None,
+                    ),
+                }
+                for i in d.network.interfaces
+                if i.wireless
+            ],
+        }
+    )
+
+
+async def camera_join(request: web.Request) -> web.Response:
+    """Ask Home Assistant to join this hotspot camera's Wi-Fi."""
+    d, cam = _camera(request)
+    if cam.connection != "hotspot":
+        return _error(400, "not a hotspot camera")
+    return web.json_response(d.request_join(cam))
+
+
+async def camera_join_status(request: web.Request) -> web.Response:
+    d, cam = _camera(request)
+    return web.json_response(d.join_status(cam))
+
+
+async def camera_join_result(request: web.Request) -> web.Response:
+    """The integration reports how a join went (token API only)."""
+    d, cam = _camera(request)
+    if not request.app[SECRETS]:
+        return _error(403, "only Home Assistant reports join results")
+    body = await _json(request)
+    state = body.get("state")
+    if state not in JOIN_STATES:
+        return _error(400, f"state must be one of {list(JOIN_STATES)}")
+    reason = body.get("reason")
+    d.set_join_result(cam.id, str(state), str(reason)[:200] if reason else None)
+    return web.json_response({"ok": True})
+
+
 async def wizard_save_camera(request: web.Request) -> web.Response:
     d = _daemon(request)
     body = await _json(request)
+    existing = d.options.camera(str(body.get("id") or ""))
+    if existing is not None and body.get("wifi_password") in (None, "", MASK):
+        # Editing without retyping the password: keep the stored one.
+        body["wifi_password"] = existing.wifi_password
     try:
         cam = CameraOptions.model_validate(body)
     except ValueError as err:
@@ -740,6 +805,10 @@ def _add_routes(app: web.Application) -> None:
     r.add_post(f"{API}/wizard/camera", wizard_save_camera)
     r.add_post(f"{API}/wizard/capture-profile", wizard_capture_profile)
     r.add_post(f"{API}/wizard/station", wizard_station)
+    r.add_get(f"{API}/wizard/interfaces", wizard_interfaces)
+    r.add_post(f"{API}/cameras/{{camera}}/join", camera_join)
+    r.add_get(f"{API}/cameras/{{camera}}/join", camera_join_status)
+    r.add_post(f"{API}/cameras/{{camera}}/join-result", camera_join_result)
 
 
 def build_api_app(daemon: Daemon) -> web.Application:

@@ -78,96 +78,258 @@ async function overview() {
   timer = setInterval(() => draw().catch(() => {}), 3000);
 }
 
+const DRIVERS = { auto: "Detect automatically", novatek: "Novatek", viidure_app: "Viidure app (/app)", http_index: "Plain HTTP file index" };
+const JOIN_REASONS = {
+  integration_not_connected: "The Dashcam Sync integration is not connected to this app, so Home Assistant cannot be asked to join.",
+  no_answer: "Home Assistant did not answer the join request.",
+  device_in_block: "A device on your network uses an address in the camera's reserved block. Run Network check on the camera for details.",
+  address_in_use: "Home Assistant's address on the camera network is already used on your network. Run Network check for details.",
+  camera_collides: "Something on your network has the camera's address. See Overlapping addresses in the documentation.",
+};
+const joinReason = (r) => {
+  if (!r) return "";
+  const key = r.split(":")[0];
+  if (key === "no_adapter") return `Home Assistant has no Wi-Fi interface named ${esc(r.split(":")[1] || "")}.`;
+  if (key === "app_unavailable") return "Home Assistant could not read the camera's Wi-Fi settings from the app.";
+  return esc(JOIN_REASONS[key] || r);
+};
+const ago = (iso) => {
+  if (!iso) return "never";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : when(iso);
+};
+const OVERLAP = {
+  no_overlap: ["ok", "No overlap with your home network."],
+  overlap_block_free: ["ok", "Overlaps your home network, but the reserved addresses are free."],
+  device_in_block: ["bad", "A device on your network uses an address in the reserved block."],
+  address_in_use: ["bad", "Home Assistant's address on the camera network is in use on your network."],
+  camera_collides: ["bad", "Something on your network has the camera's address."],
+};
+
 async function cameras() {
   const list = await api("cameras");
   main.innerHTML = `
     <div class="row"><h2>Cameras</h2><button class="primary" id="add">Add camera</button></div>
+    ${list.length ? "" : `<div class="card muted">No camera yet.</div>`}
     ${list.map(({ options: o, status: s }) => `
       <div class="card" data-id="${esc(o.id)}">
-        <div class="row"><div><b>${esc(o.name || o.id)}</b> <span class="muted">${esc(o.connection)} · ${esc(o.id)}</span></div>
+        <div class="row"><div><b>${esc(o.name || o.id)}</b>
+            <span class="pill ${!o.enabled ? "warn" : s?.connected ? "ok" : ""}">${!o.enabled ? "paused" : s?.connected ? "connected" : "not in range"}</span>
+            ${s && s.sync_status !== "idle" ? `<span class="pill">${esc(s.sync_status)}</span>` : ""}</div>
           <div>
-            <button data-act="sync" ${s?.connected ? "" : "disabled"}>Sync now</button>
-            <button data-act="restore">Restore recording</button>
-            <button data-act="toggle">${o.enabled ? "Pause" : "Resume"}</button>
+            <button data-act="sync" ${s?.connected && o.enabled ? "" : "disabled"}>Sync now</button>
+            <button data-act="edit">Edit</button>
             ${o.connection === "hotspot" ? '<button data-act="overlap">Network check</button>' : ""}
-            <button data-act="profile">Capture device profile</button>
-            <button data-act="delete" class="danger">Remove</button>
+            <details class="more"><summary>More</summary>
+              <button data-act="restore">Restore recording</button>
+              <button data-act="toggle">${o.enabled ? "Pause" : "Resume"}</button>
+              <button data-act="profile">Capture device profile</button>
+              <button data-act="delete" class="danger">Remove</button>
+            </details>
           </div></div>
-        <div class="muted">${esc(o.ssid || o.host || "")} ${o.static_address ? "· HA address " + esc(o.static_address) : ""}</div>
-        <pre class="out" hidden></pre>
+        <div class="muted">${o.connection === "hotspot"
+          ? `Camera hotspot · ${esc(o.interface || "?")} · ${esc(o.ssid || "?")}${o.static_address ? ` · HA ${esc(o.static_address)}` : ""}`
+          : `Local network · ${esc(o.host || "auto-detect")}`}
+          · last sync ${ago(s?.last_sync)}${s?.error ? ` · <span class="bad-text">${esc(s.error)}</span>` : ""}</div>
+        <div class="out" hidden></div>
       </div>`).join("")}
     <div id="wizard"></div>`;
-  $("#add").onclick = wizard;
+  $("#add").onclick = () => wizard();
   main.querySelectorAll("[data-act]").forEach((b) => {
     b.onclick = async () => {
       const card = b.closest(".card"), id = card.dataset.id, out = $(".out", card);
-      const show = (v) => { out.hidden = false; out.textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2); };
+      const show = (html) => { out.hidden = false; out.innerHTML = html; };
       try {
         const act = b.dataset.act;
-        if (act === "sync") await api(`cameras/${id}/sync`, { method: "POST" });
-        else if (act === "restore") await api(`cameras/${id}/restore`, { method: "POST" });
+        if (act === "sync") { await api(`cameras/${id}/sync`, { method: "POST" }); show("Sync requested."); }
+        else if (act === "restore") { await api(`cameras/${id}/restore`, { method: "POST" }); show("Restore requested."); }
+        else if (act === "edit") wizard(list.find((x) => x.options.id === id).options);
         else if (act === "toggle") { await api(`cameras/${id}`, { method: "PATCH", body: { enabled: b.textContent !== "Pause" } }); return cameras(); }
-        else if (act === "overlap") show(await api(`cameras/${id}/overlap`, { method: "POST", body: {} }));
-        else if (act === "profile") {
-          const host = list.find((x) => x.options.id === id).options.host || prompt("Camera address");
-          if (host) show(await api("wizard/capture-profile", { method: "POST", body: { host } }));
-        } else if (act === "delete" && confirm(`Remove ${id}?`)) { await api(`cameras/${id}`, { method: "DELETE" }); return cameras(); }
-        if (["sync", "restore"].includes(act)) show("Requested.");
-      } catch (e) { show("Error: " + e.message); }
+        else if (act === "overlap") {
+          const r = await api(`cameras/${id}/overlap`, { method: "POST", body: {} });
+          const [cls, text] = OVERLAP[r.result] || ["warn", r.result];
+          show(`<span class="pill ${cls}">${esc(text)}</span> <span class="muted">Reserved ${esc(r.block || "")}${r.conflicts?.length ? ` · in use: ${esc(r.conflicts.join(", "))}` : ""}</span>`);
+        } else if (act === "profile") {
+          const host = list.find((x) => x.options.id === id).options.host || prompt("Camera address (IP or host:port)");
+          if (!host) return;
+          const bundle = await api("wizard/capture-profile", { method: "POST", body: { host } });
+          const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
+          show(`Captured. <a href="${url}" download="device-profile-${esc(id)}.json">Download the profile</a> and attach it to a GitHub issue.`);
+        } else if (act === "delete" && confirm(`Remove ${id}? Downloaded clips are kept.`)) { await api(`cameras/${id}`, { method: "DELETE" }); return cameras(); }
+      } catch (e) { show(`<span class="bad-text">${esc(e.message)}</span>`); }
     };
   });
 }
 
-function wizard() {
-  const w = $("#wizard");
-  w.innerHTML = `<div class="card"><h2>Setup wizard</h2>
-    <label>Name</label><input id="w-name" placeholder="Polestar 2">
-    <label>Connection</label><select id="w-conn"><option value="hotspot">Camera's own Wi-Fi (hotspot)</option><option value="lan">Camera on my home network</option></select>
-    <div id="w-hot">
-      <label>Wi-Fi adapter</label><input id="w-if" value="wlan0">
-      <label>Camera Wi-Fi name (SSID)</label><input id="w-ssid" list="aps"><datalist id="aps"></datalist>
-      <label>Camera Wi-Fi password</label><input id="w-pass" type="password" autocomplete="off">
-    </div>
-    <label>Camera address (optional, auto-detected otherwise)</label><input id="w-host" placeholder="192.168.1.254">
-    <p><button id="w-scan">Scan Wi-Fi</button> <button id="w-probe">Probe camera</button> <button id="w-save" class="primary">Save</button></p>
-    <div id="w-out" class="card" hidden></div></div>`;
-  const out = (v) => { const el = $("#w-out"); el.hidden = false; el.textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2); };
+// ------------------------------------------------------------------ setup wizard
+
+async function wizard(existing) {
+  const box = $("#wizard");
+  const edit = !!existing;
+  const st = {
+    id: existing?.id || "", name: existing?.name || "", connection: existing?.connection || "hotspot",
+    interface: existing?.interface || "", ssid: existing?.ssid || "", password: "",
+    host: existing?.host || "", driver: existing?.driver || "auto", ipv4: existing?.ipv4 || "static",
+    static_address: existing?.static_address || "", step: edit ? 2 : 1, detection: null,
+  };
+  let ifaces = { known: false, wireless: [] };
+  try { ifaces = await api("wizard/interfaces"); } catch (e) { /* listed as unavailable below */ }
+  if (!st.interface) {
+    const free = ifaces.wireless.filter((i) => !i.in_use_by || i.in_use_by === st.id);
+    if (free.length) st.interface = free[0].name;
+  }
+  const STEPS = ["Connection", "Details", "Name", "Connect"];
+  const slug = (n) => (n || "camera").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 32) || "camera";
+  const read = () => {
+    const v = (id) => { const el = $("#" + id); return el ? el.value.trim() : undefined; };
+    for (const [k, id] of [["interface", "w-if"], ["ssid", "w-ssid"], ["host", "w-host"], ["name", "w-name"], ["driver", "w-driver"], ["ipv4", "w-ipv4"], ["static_address", "w-static"]]) {
+      const val = v(id); if (val !== undefined) st[k] = val;
+    }
+    const pw = $("#w-pass"); if (pw) st.password = pw.value;
+    const conn = box.querySelector("input[name=w-conn]:checked"); if (conn) st.connection = conn.value;
+  };
+  const err = (msg) => { $("#w-err").innerHTML = msg ? `<div class="card notice bad">${msg}</div>` : ""; };
+  const ifaceOptions = () => ifaces.wireless.map((i) => {
+    const note = i.in_use_by && i.in_use_by !== st.id ? `used by ${i.in_use_by}` : i.connected ? `connected${i.ssid ? " to " + i.ssid : ""}` : i.enabled ? "not connected" : "disabled";
+    return `<option value="${esc(i.name)}" ${i.name === st.interface ? "selected" : ""}>${esc(i.name)} · ${esc(note)}</option>`;
+  }).join("");
   const summary = (r, b) => {
-    const el = $("#w-out"); el.hidden = false;
-    const caps = Object.entries(r.capabilities || {}).filter(([, on]) => on).map(([k]) => `<span class="pill ok">${esc(k.replace("_", " "))}</span>`).join(" ");
-    el.innerHTML = `<b>Detected a ${esc(r.driver)} camera</b> at ${esc(r.host)}${r.firmware ? ` · firmware ${esc(r.firmware)}` : ""}${r.model ? ` · ${esc(r.model)}` : ""}<br>
-      <span class="muted">Can:</span> ${caps || "–"}<br>
-      <span class="muted">Reserved address block:</span> ${esc(b.block)} (Home Assistant would use ${esc(b.home_address)})
-      ${b.overlaps_home_network ? '<span class="pill warn">overlaps your home network: only these four addresses are claimed</span>' : '<span class="pill ok">no overlap with your home network</span>'}`;
+    const caps = Object.entries(r.capabilities || {}).filter(([, on]) => on).map(([k]) => `<span class="pill ok">${esc(k.replace(/_/g, " "))}</span>`).join(" ");
+    return `<div class="card"><b>Detected a ${esc(r.driver)} camera</b> at ${esc(r.host)}${r.firmware ? ` · firmware ${esc(r.firmware)}` : ""}${r.model ? ` · ${esc(r.model)}` : ""}
+      <div>${caps || ""}</div>
+      ${b ? `<div class="muted">Reserved address block ${esc(b.block)} · Home Assistant uses ${esc(b.static_address)}
+        ${b.overlaps_home_network ? '<span class="pill warn">overlaps your home network: only these 4 addresses are claimed</span>' : '<span class="pill ok">no overlap with your home network</span>'}</div>` : ""}</div>`;
   };
-  const conn = $("#w-conn");
-  conn.onchange = () => { $("#w-hot").hidden = conn.value !== "hotspot"; };
-  $("#w-scan").onclick = async () => {
-    try {
-      const r = await api("wizard/wifi-scan?interface=" + encodeURIComponent($("#w-if").value));
-      if (!r.available) return out("Scanning is not available here. Type the camera's Wi-Fi name.");
-      $("#aps").innerHTML = r.accesspoints.map((a) => `<option value="${esc(a.ssid)}">`).join("");
-      out(`${r.accesspoints.length} networks found.`);
-    } catch (e) { out(e.message); }
+
+  const draw = () => {
+    clearInterval(timer);
+    const step = st.step;
+    let body = "";
+    if (step === 1) {
+      body = `<label>How does the camera connect?</label>
+        <p><label class="choice"><input type="radio" name="w-conn" value="hotspot" ${st.connection === "hotspot" ? "checked" : ""}> <b>Camera hotspot</b> <span class="muted">· the camera runs its own Wi-Fi; Home Assistant joins it with a Wi-Fi interface</span></label>
+        <label class="choice"><input type="radio" name="w-conn" value="lan" ${st.connection === "lan" ? "checked" : ""}> <b>Local network</b> <span class="muted">· the camera is a client on your LAN</span></label></p>`;
+    } else if (step === 2 && st.connection === "hotspot") {
+      body = `<label for="w-if">Wi-Fi interface</label>
+        ${ifaces.wireless.length ? `<select id="w-if">${ifaceOptions()}</select>`
+          : `<input id="w-if" value="${esc(st.interface)}" placeholder="wlan0"><div class="muted">${ifaces.known ? "Home Assistant reports no Wi-Fi interface. A supported USB Wi-Fi adapter is the usual fix." : "Interfaces are not available here; type the name shown under Settings › System › Network."}</div>`}
+        <label for="w-ssid">Camera SSID</label>
+        <div class="row" style="justify-content:flex-start"><input id="w-ssid" list="aps" value="${esc(st.ssid)}"><datalist id="aps"></datalist> <button id="w-scan">Scan</button></div>
+        <label for="w-pass">Camera Wi-Fi password</label>
+        <input id="w-pass" type="password" autocomplete="off" placeholder="${edit ? "leave blank to keep the current one" : ""}">`;
+    } else if (step === 2) {
+      body = `<label for="w-host">Camera IP or host</label>
+        <div class="row" style="justify-content:flex-start"><input id="w-host" value="${esc(st.host)}" placeholder="192.168.2.50"> <button id="w-probe">Test</button></div>
+        <div class="muted">Leave empty to look for the camera automatically. Give it a DHCP reservation in your router so the address does not change.</div>
+        <div id="w-det">${st.detection ? summary(st.detection) : ""}</div>`;
+    } else if (step === 3) {
+      body = `<label for="w-name">Name</label><input id="w-name" value="${esc(st.name)}" placeholder="Polestar 2">
+        <details id="w-adv"><summary>Advanced</summary>
+          <label for="w-driver">Driver</label><select id="w-driver">${Object.entries(DRIVERS).map(([k, t]) => `<option value="${k}" ${k === st.driver ? "selected" : ""}>${t}</option>`).join("")}</select>
+          ${st.connection === "hotspot" ? `
+          <label for="w-host">Camera IP</label><input id="w-host" value="${esc(st.host)}" placeholder="from the driver's default">
+          <label for="w-ipv4">IPv4 on the camera network</label><select id="w-ipv4"><option value="static" ${st.ipv4 !== "auto" ? "selected" : ""}>Static, small block around the camera (recommended)</option><option value="auto" ${st.ipv4 === "auto" ? "selected" : ""}>DHCP from the camera</option></select>
+          <label for="w-static">Home Assistant address (CIDR)</label><input id="w-static" value="${esc(st.static_address)}" placeholder="computed, e.g. 192.168.1.253/30">` : ""}
+          <label>ID</label><input value="${esc(edit ? st.id : slug(st.name))}" disabled>
+          <div class="muted">Used in folder names and entity IDs${edit ? "; it cannot change" : ""}.</div>
+        </details>`;
+    } else {
+      body = `<div id="w-connect"></div>`;
+    }
+    box.innerHTML = `<div class="card"><div class="row"><h2>${edit ? "Edit " + esc(st.name || st.id) : "Add camera"}</h2><button id="w-close">Close</button></div>
+      <div class="steps">${STEPS.map((t, i) => `<span class="${i + 1 === step ? "on" : i + 1 < step ? "done" : ""}">${i + 1}. ${t}</span>`).join("")}</div>
+      ${body}
+      <div id="w-err"></div>
+      ${step < 4 ? `<p>${step > (edit ? 2 : 1) ? '<button id="w-back">Back</button> ' : ""}<button id="w-next" class="primary">${step === 3 ? "Save and connect" : "Next"}</button></p>` : ""}</div>`;
+    $("#w-close").onclick = () => { clearInterval(timer); box.innerHTML = ""; cameras(); };
+    if ($("#w-back")) $("#w-back").onclick = () => { read(); st.step -= 1; draw(); };
+    if ($("#w-next")) $("#w-next").onclick = next;
+    if ($("#w-name")) $("#w-name").oninput = (e) => { const id = $("#w-adv input[disabled]"); if (id && !edit) id.value = slug(e.target.value); };
+    if ($("#w-scan")) $("#w-scan").onclick = async () => {
+      read();
+      try {
+        const r = await api("wizard/wifi-scan?interface=" + encodeURIComponent(st.interface));
+        if (!r.available) return err("Scanning is not available to apps here. Type the camera's SSID.");
+        $("#aps").innerHTML = r.accesspoints.map((a) => `<option value="${esc(a.ssid)}">`).join("");
+        err("");
+      } catch (e) { err(esc(e.message)); }
+    };
+    if ($("#w-probe")) $("#w-probe").onclick = async () => {
+      read();
+      try {
+        const r = await api("wizard/probe", { method: "POST", body: { host: st.host } });
+        if (!r.supported) return err("No driver recognised a camera there. Check the address, or capture a device profile.");
+        st.host = r.host; st.detection = r; $("#w-host").value = r.host; $("#w-det").innerHTML = summary(r); err("");
+      } catch (e) { err(esc(e.message)); }
+    };
+    if (step === 4) connect();
   };
-  $("#w-probe").onclick = async () => {
-    try {
-      const r = await api("wizard/probe", { method: "POST", body: { host: $("#w-host").value } });
-      if (!r.supported) return out("No driver recognised a camera. Join its Wi-Fi from Home Assistant first, or capture a device profile.");
-      $("#w-host").value = r.host;
-      const b = await api("wizard/block", { method: "POST", body: { camera_ip: r.host.split(":")[0] } });
-      summary(r, b);
-    } catch (e) { out(e.message); }
+
+  const next = async () => {
+    read();
+    if (st.step === 2 && st.connection === "hotspot") {
+      if (!st.interface) return err("Choose the Wi-Fi interface that reaches the car.");
+      if (!st.ssid) return err("Enter the camera's SSID.");
+      if (!edit && !st.password) return err("Enter the camera's Wi-Fi password.");
+    }
+    if (st.step === 3) {
+      if (!st.name) return err("Give the camera a name.");
+      const body = { id: edit ? st.id : slug(st.name), name: st.name, connection: st.connection, driver: st.driver, enabled: existing ? existing.enabled : true };
+      if (existing?.sync_mode) body.sync_mode = existing.sync_mode;
+      if (st.host) body.host = st.host;
+      if (st.connection === "hotspot") Object.assign(body, { interface: st.interface, ssid: st.ssid, wifi_password: st.password, ipv4: st.ipv4 });
+      if (st.connection === "hotspot" && st.static_address) body.static_address = st.static_address;
+      try { const r = await api("wizard/camera", { method: "POST", body }); st.id = r.camera; }
+      catch (e) { return err(esc(e.message)); }
+    }
+    st.step += 1; draw();
   };
-  $("#w-save").onclick = async () => {
-    const name = $("#w-name").value.trim();
-    const id = (name || "camera").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 32) || "camera";
-    const body = { id, name, connection: conn.value, driver: "auto", enabled: true };
-    if (conn.value === "hotspot") Object.assign(body, { interface: $("#w-if").value, ssid: $("#w-ssid").value, wifi_password: $("#w-pass").value });
-    if ($("#w-host").value) body.host = $("#w-host").value;
-    try { await api("wizard/camera", { method: "POST", body }); out("Saved. Open the Dashcam Sync integration in Home Assistant to join the Wi-Fi."); setTimeout(cameras, 900); }
-    catch (e) { out(e.message); }
+
+  const connect = async () => {
+    const out = $("#w-connect");
+    const detect = async (host) => {
+      try {
+        const r = await api("wizard/probe", { method: "POST", body: { host } });
+        if (!r.supported) return null;
+        let b = null;
+        if (st.connection === "hotspot") b = await api("wizard/block", { method: "POST", body: { camera_ip: r.host.split(":")[0] } }).catch(() => null);
+        return summary(r, b);
+      } catch (e) { return null; }
+    };
+    const done = (html) => { clearInterval(timer); out.innerHTML = `${html}<p><button id="w-done" class="primary">Done</button></p>`; $("#w-done").onclick = () => { box.innerHTML = ""; cameras(); }; };
+    if (st.connection === "lan") {
+      out.innerHTML = `<div class="muted">Looking for the camera…</div>`;
+      const html = await detect(st.host);
+      return done(html || `<div class="card notice">Saved. The camera did not answer yet; it is picked up as soon as it is reachable.</div>`);
+    }
+    const manual = (p, why) => `<div class="card notice"><b>Join the camera's Wi-Fi in Home Assistant</b>${why ? `<div class="muted">${why}</div>` : ""}
+      <div>Open <a href="/config/network" target="_top">Settings › System › Network</a>, choose <b>${esc(p.interface)}</b>, then:</div>
+      <table class="kv">${[["Wi-Fi mode", "Infrastructure"], ["SSID", p.ssid], ["Security", "WPA-PSK, with the camera password you entered"],
+        ["IPv4", p.ipv4 === "auto" ? "Automatic (DHCP)" : `Static · ${p.address || "?"}`], ["Gateway", "none"], ["DNS servers", "none"], ["IPv6", "Disabled"]]
+        .map(([k, v]) => `<tr><td class="muted">${k}</td><td><code>${esc(v)}</code></td><td>${["SSID", "IPv4"].includes(k) && v ? `<button class="copy" data-v="${esc(k === "IPv4" ? p.address || "" : v)}">Copy</button>` : ""}</td></tr>`).join("")}</table>
+      <div class="muted">No gateway and no DNS keep your default route and name resolution on Ethernet.</div></div>`;
+    const poll = async () => {
+      let j;
+      try { j = await api(`cameras/${st.id}/join`); } catch (e) { return; }
+      let html = "";
+      if (j.state === "requested") html = `<div class="muted">Asking Home Assistant to join <b>${esc(j.profile.ssid)}</b> on ${esc(j.profile.interface)}…</div>`;
+      else if (j.state === "joined") html = `<div><span class="pill ok">joined</span> Waiting for the camera to answer…</div>`;
+      else if (j.state === "failed") html = `<div class="card notice bad"><b>Could not join.</b> ${joinReason(j.reason)}</div><p><button id="w-retry">Try again</button></p>${manual(j.profile)}`;
+      else if (j.state === "manual") html = manual(j.profile, joinReason(j.reason)) + `<div class="muted">Waiting for the camera to answer…</div>`;
+      if (j.camera_connected) {
+        const det = await detect(st.host || j.profile.camera || "");
+        return done(det || `<div><span class="pill ok">connected</span> The camera answers.</div>`);
+      }
+      out.innerHTML = html;
+      out.querySelectorAll("button.copy").forEach((b) => { b.onclick = () => navigator.clipboard?.writeText(b.dataset.v); });
+      if ($("#w-retry")) $("#w-retry").onclick = async () => { await api(`cameras/${st.id}/join`, { method: "POST" }); poll(); };
+    };
+    try { await api(`cameras/${st.id}/join`, { method: "POST" }); } catch (e) { out.innerHTML = `<div class="card notice bad">${esc(e.message)}</div>`; return; }
+    await poll();
+    timer = setInterval(poll, 2000);
   };
+
+  draw();
 }
 
 async function clips() {

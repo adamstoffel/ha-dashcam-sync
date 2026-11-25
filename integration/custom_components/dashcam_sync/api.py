@@ -138,6 +138,11 @@ class DashcamSyncApi:
             )
         )
 
+    async def async_join_result(self, camera: str, state: str, reason: str | None) -> None:
+        await self._request(
+            "POST", f"cameras/{camera}/join-result", json={"state": state, "reason": reason}
+        )
+
     async def async_hint(self, camera: str | None = None) -> None:
         await self._request("POST", "hint", json={"camera": camera} if camera else {})
 

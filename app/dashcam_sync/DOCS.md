@@ -20,7 +20,13 @@ Dashcam Sync pulls video clips off a Wi-Fi dashcam into Home Assistant whenever 
 1. Add this app repository under **Settings › Apps › App store › Repositories**.
 2. Install **Dashcam Sync**, start it, and open it from the sidebar.
 3. Install the **Dashcam Sync integration** from the Marketplace (or its My link) and confirm the discovered "Dashcam Sync" device.
-4. In the panel, open **Cameras › Add camera** and follow the setup wizard.
+4. In the panel, open **Cameras › Add camera**. The wizard asks four things:
+    1. **Connection:** *Camera hotspot* (the camera runs its own Wi-Fi) or *Local network* (the camera is a client on your LAN).
+    2. **Details:** for a hotspot, the Wi-Fi interface (listed from Home Assistant, e.g. `wlp4s0`), the camera's SSID and password; for the local network, its IP (with **Test** to detect it).
+    3. **Name**, with an *Advanced* section for the driver, the camera IP, the IPv4 mode and Home Assistant's static address.
+    4. **Connect:** for a hotspot, Home Assistant is asked to join the camera's Wi-Fi (after the address check). If it cannot, the wizard shows the exact profile to enter under **Settings › System › Network**, with copy buttons, and carries on once the camera answers.
+
+    **Edit** on a camera opens the same steps; leave the password empty to keep the stored one.
 
 ## Supported cameras
 

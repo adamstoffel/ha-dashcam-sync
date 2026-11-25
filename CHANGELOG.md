@@ -4,6 +4,8 @@ All notable changes to the integration and the app. Both are released together w
 
 ## Unreleased
 
+- Panel: a step-by-step camera wizard (Connection: Camera hotspot / Local network; Details; Name with an Advanced section; Connect). The Wi-Fi interface is chosen from what Home Assistant reports instead of typing `wlan0`; the ID is derived from the name; cameras are edited in the same steps, keeping the stored password when it is left empty. Camera cards show connected / not in range, last sync and errors, with less-used actions under **More**; results are formatted instead of raw JSON, and a device profile downloads as a file.
+- Hotspot join from the wizard: the app asks the integration (a `join_wifi` push), which runs the address check, checks the interface and writes the profile, then reports back. When it cannot (integration not connected, no answer in 45 s, Supervisor client unavailable), the wizard shows the exact profile with copy buttons and continues when the camera answers. API: `GET /wizard/interfaces`, `POST/GET /cameras/{id}/join`, `POST /cameras/{id}/join-result`.
 - App: interrupted downloads, audited and hardened, each with a fault-injection test that fails on the previous code:
   - a camera that states no file size could have a cut-off download recorded as complete; completeness is now confirmed by asking for the bytes after the end;
   - a body that ended early was thrown away; it is now kept and resumed;
