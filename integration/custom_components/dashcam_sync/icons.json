@@ -1,0 +1,40 @@
+{
+  "entity": {
+    "binary_sensor": {
+      "connected": { "default": "mdi:car-connected" },
+      "network_target": { "default": "mdi:nas" }
+    },
+    "sensor": {
+      "sync_status": { "default": "mdi:sync" },
+      "clips_remaining": { "default": "mdi:filmstrip" },
+      "data_remaining": { "default": "mdi:download" },
+      "download_speed": { "default": "mdi:speedometer" },
+      "last_sync": { "default": "mdi:clock-check-outline" },
+      "last_event_clip": { "default": "mdi:alert-circle-outline" },
+      "sd_card_free": { "default": "mdi:sd" },
+      "local_storage_used": { "default": "mdi:harddisk" },
+      "local_storage_free": { "default": "mdi:harddisk" },
+      "network_storage_used": { "default": "mdi:nas" },
+      "network_storage_free": { "default": "mdi:nas" }
+    },
+    "event": { "clip": { "default": "mdi:video-vintage" } },
+    "image": { "latest_event": { "default": "mdi:image-search" } },
+    "camera": { "live": { "default": "mdi:car-light-dimmed" } },
+    "button": {
+      "sync_now": { "default": "mdi:cloud-download" },
+      "restore_recording": { "default": "mdi:record-rec" },
+      "purge_now": { "default": "mdi:delete-sweep" }
+    },
+    "switch": {
+      "auto_sync": { "default": "mdi:sync", "state": { "off": "mdi:sync-off" } }
+    },
+    "select": { "sync_mode": { "default": "mdi:format-list-checks" } }
+  },
+  "services": {
+    "sync": { "service": "mdi:cloud-download" },
+    "keep_clip": { "service": "mdi:lock" },
+    "unkeep_clip": { "service": "mdi:lock-open-variant" },
+    "delete_clip": { "service": "mdi:delete" },
+    "purge": { "service": "mdi:delete-sweep" }
+  }
+}

@@ -136,6 +136,7 @@ class CameraStatus:
     capabilities: dict[str, bool] = field(default_factory=dict)
     arrival_hint: bool = False
     current_file: str | None = None
+    sync_mode: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -162,6 +163,7 @@ class CameraStatus:
             "capabilities": self.capabilities,
             "arrival_hint": self.arrival_hint,
             "current_file": self.current_file,
+            "sync_mode": self.sync_mode,
         }
 
 
@@ -252,6 +254,7 @@ class CameraWorker:
 
     def _publish_status(self) -> None:
         self.status.arrival_hint = self.ctx.now() < self._hint_until
+        self.status.sync_mode = self.camera.sync_mode or self.ctx.sync_options().mode
         self.ctx.bus.publish("camera", camera=self.camera.id, status=self.status.as_dict())
 
     def _set(self, state: str) -> None:

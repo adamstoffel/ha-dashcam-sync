@@ -1,0 +1,68 @@
+blueprint:
+  name: Notify on new dashcam event clip
+  description: >-
+    Sends a mobile notification with the thumbnail and a link to the clip whenever
+    Dashcam Sync downloads a new event clip.
+  domain: automation
+  author: Dashcam Sync
+  source_url: https://github.com/adamstoffel/ha-dashcam-sync/blob/main/integration/blueprints/automation/dashcam_sync/notify_event_clip.yaml
+  homeassistant:
+    min_version: 2026.11.0
+  input:
+    clip_event:
+      name: Clip event entity
+      description: The Clip event entity of your dashcam.
+      selector:
+        entity:
+          filter:
+            - integration: dashcam_sync
+              domain: event
+    latest_image:
+      name: Latest event image
+      description: The Latest event image entity of the same dashcam.
+      selector:
+        entity:
+          filter:
+            - integration: dashcam_sync
+              domain: image
+    notify_service:
+      name: Notify action
+      description: The mobile app notify action, for example notify.mobile_app_pixel.
+      selector:
+        text:
+    title:
+      name: Title
+      default: Dashcam event
+      selector:
+        text:
+    message:
+      name: Message
+      default: A new event clip was saved.
+      selector:
+        text:
+
+mode: queued
+max_exceeded: silent
+
+triggers:
+  - trigger: state
+    entity_id: !input clip_event
+    attribute: event_type
+    to: event_clip
+
+conditions:
+  - condition: template
+    value_template: "{{ trigger.to_state.attributes.media_content_id is defined }}"
+
+actions:
+  - action: "{{ notify_service_name }}"
+    data:
+      title: !input title
+      message: !input message
+      data:
+        image: "{{ state_attr(image_entity, 'entity_picture') }}"
+        clickAction: "/media-browser/browser/{{ trigger.to_state.attributes.media_content_id | urlencode }}"
+        url: "/media-browser/browser/{{ trigger.to_state.attributes.media_content_id | urlencode }}"
+variables:
+  notify_service_name: !input notify_service
+  image_entity: !input latest_image

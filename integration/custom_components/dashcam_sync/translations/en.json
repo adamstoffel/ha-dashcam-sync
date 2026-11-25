@@ -1,0 +1,365 @@
+{
+  "config": {
+    "flow_title": "{name}",
+    "step": {
+      "user": {
+        "title": "Connect to the Dashcam Sync app",
+        "description": "Normally the app is discovered automatically. Enter its internal host name, the API port (8100) and the token if it was not.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "token": "Token"
+        },
+        "data_description": {
+          "host": "The app's internal host name, for example local-dashcam-sync.",
+          "port": "The integration API port of the app.",
+          "token": "The API token the app shows in its log on first start."
+        }
+      },
+      "hassio_confirm": {
+        "title": "Dashcam Sync discovered",
+        "description": "Set up Dashcam Sync with the {addon} app?"
+      },
+      "reauth_confirm": {
+        "title": "Re-enter the token",
+        "description": "The app rejected the stored token. Enter the current token.",
+        "data": {
+          "token": "Token"
+        }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Dashcam Sync",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "token": "Token"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Cannot reach the Dashcam Sync app. Is it running?",
+      "invalid_auth": "The token was rejected.",
+      "incompatible_api": "The app and this integration speak incompatible API versions. Update both.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "Dashcam Sync is already set up.",
+      "invalid_discovery": "The discovery message from the app was incomplete.",
+      "cannot_connect": "Cannot reach the Dashcam Sync app. Is it running?",
+      "invalid_auth": "The token was rejected.",
+      "incompatible_api": "The app and this integration speak incompatible API versions. Update both.",
+      "unknown": "Unexpected error.",
+      "reauth_successful": "The token was updated.",
+      "reconfigure_successful": "The connection was updated.",
+      "unique_id_mismatch": "That is a different Dashcam Sync app."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Dashcam Sync options",
+        "menu_options": {
+          "general": "Arrival hint and live view",
+          "wifi": "Connect a camera's Wi-Fi"
+        }
+      },
+      "general": {
+        "title": "Arrival hint and live view",
+        "data": {
+          "presence_entity": "Arrival hint entity",
+          "live_camera": "Create a live camera entity"
+        },
+        "data_description": {
+          "presence_entity": "When this entity changes to home or open (a car's device tracker or a garage door), the app probes every 3 s for 5 minutes instead of every 15 s.",
+          "live_camera": "Core opens the camera's RTSP stream directly. Unavailable while the camera is out of range."
+        }
+      },
+      "wifi": {
+        "title": "Connect a camera's Wi-Fi",
+        "description": "Home Assistant joins the camera's hotspot on its Wi-Fi adapter. Pick the camera.",
+        "data": {
+          "camera": "Camera"
+        }
+      },
+      "wifi_apply": {
+        "title": "Join {camera}'s Wi-Fi",
+        "description": "This writes a Wi-Fi profile for **{ssid}** on **{interface}** with the static address **{address}/{prefix}** (block {block}), no gateway and no DNS servers, so only those four addresses are routed to the car. Your internet and name resolution stay on Ethernet. Press submit to apply it."
+      },
+      "wifi_manual": {
+        "title": "Set the Wi-Fi up by hand",
+        "description": "Home Assistant cannot change the Wi-Fi profile from here. Open [Settings > System > Network](https://my.home-assistant.io/redirect/network/), choose **{interface}** and enter:\n\n- Mode: infrastructure, Wi-Fi name **{ssid}**, WPA password (shown in the Dashcam Sync app)\n- IPv4: static, address **{address}**, prefix **{prefix}**, leave gateway and DNS empty\n- IPv6: disabled\n\nPress submit when you are done."
+      }
+    },
+    "error": {
+      "overlap_device_in_block": "A device Home Assistant knows has an address inside the camera's block ({block}): {conflicts}. Move it, then try again.",
+      "overlap_address_in_use": "Something on your home network answers inside the camera's block ({block}): {conflicts}. Free those addresses, then try again.",
+      "overlap_camera_collides": "Something on your home network has exactly the dashcam's address ({conflicts}). See the app's documentation, then try again.",
+      "no_adapter": "Home Assistant has no wireless interface named {interface}. Check the adapter and the interface name in the app."
+    },
+    "abort": {
+      "no_hotspot_cameras": "No hotspot camera is set up in the app yet.",
+      "app_unavailable": "The Dashcam Sync app did not answer. Is it running?"
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "connected": {
+        "name": "Connected"
+      },
+      "network_target": {
+        "name": "Network storage"
+      }
+    },
+    "sensor": {
+      "sync_status": {
+        "name": "Sync status",
+        "state": {
+          "idle": "Idle",
+          "detecting": "Detecting",
+          "preparing": "Preparing",
+          "listing": "Listing",
+          "downloading": "Downloading",
+          "restoring": "Restoring",
+          "error": "Error"
+        }
+      },
+      "clips_remaining": {
+        "name": "Clips remaining"
+      },
+      "data_remaining": {
+        "name": "Data remaining"
+      },
+      "download_speed": {
+        "name": "Download speed"
+      },
+      "last_sync": {
+        "name": "Last sync"
+      },
+      "last_event_clip": {
+        "name": "Last event clip"
+      },
+      "sd_card_free": {
+        "name": "SD card free"
+      },
+      "local_storage_used": {
+        "name": "Local storage used"
+      },
+      "local_storage_free": {
+        "name": "Local storage free"
+      },
+      "network_storage_used": {
+        "name": "Network storage used"
+      },
+      "network_storage_free": {
+        "name": "Network storage free"
+      }
+    },
+    "event": {
+      "clip": {
+        "name": "Clip",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "event_clip": "Event clip",
+              "clip": "Clip",
+              "sync_completed": "Sync completed",
+              "sync_failed": "Sync failed"
+            }
+          }
+        }
+      }
+    },
+    "image": {
+      "latest_event": {
+        "name": "Latest event"
+      }
+    },
+    "camera": {
+      "live": {
+        "name": "Live"
+      }
+    },
+    "button": {
+      "sync_now": {
+        "name": "Sync now"
+      },
+      "restore_recording": {
+        "name": "Restore recording"
+      },
+      "purge_now": {
+        "name": "Purge now"
+      }
+    },
+    "switch": {
+      "auto_sync": {
+        "name": "Auto sync"
+      }
+    },
+    "select": {
+      "sync_mode": {
+        "name": "Sync mode",
+        "state": {
+          "events_only": "Events only",
+          "events_first": "Events first",
+          "everything": "Everything"
+        }
+      }
+    }
+  },
+  "services": {
+    "sync": {
+      "name": "Sync now",
+      "description": "Starts a sync session for the targeted dashcam if it is connected."
+    },
+    "keep_clip": {
+      "name": "Keep clip",
+      "description": "Protects a clip from every expiration rule.",
+      "fields": {
+        "media_content_id": {
+          "name": "Media content ID",
+          "description": "The clip's media content ID, as shown on the Clip event."
+        }
+      }
+    },
+    "unkeep_clip": {
+      "name": "Stop keeping clip",
+      "description": "Lets a protected clip expire normally again.",
+      "fields": {
+        "media_content_id": {
+          "name": "Media content ID",
+          "description": "The clip's media content ID."
+        }
+      }
+    },
+    "delete_clip": {
+      "name": "Delete clip",
+      "description": "Deletes a clip from all storage targets.",
+      "fields": {
+        "media_content_id": {
+          "name": "Media content ID",
+          "description": "The clip's media content ID."
+        }
+      }
+    },
+    "purge": {
+      "name": "Purge",
+      "description": "Runs retention now. With a dry run, returns what would be deleted.",
+      "fields": {
+        "dry_run": {
+          "name": "Dry run",
+          "description": "Only report what would be deleted."
+        }
+      }
+    }
+  },
+  "exceptions": {
+    "action_failed": {
+      "message": "Dashcam Sync could not complete the action: {error}"
+    },
+    "not_loaded": {
+      "message": "Dashcam Sync is not set up or not loaded."
+    },
+    "no_camera": {
+      "message": "Target at least one Dashcam Sync camera entity or device."
+    },
+    "invalid_media_content_id": {
+      "message": "{value} is not a Dashcam Sync clip. Expected media-source://dashcam_sync/clip/<id>."
+    }
+  },
+  "issues": {
+    "no_wifi_adapter": {
+      "title": "No Wi-Fi adapter",
+      "description": "A hotspot camera is set up but Home Assistant OS has no wireless interface. The built-in card may have no driver. A supported USB Wi-Fi adapter is the fix, or use a camera that joins your home network."
+    },
+    "camera_invalid": {
+      "title": "Camera {camera} is disabled",
+      "description": "The camera entry failed validation and was disabled: {reasons}. Fix it in the app's configuration."
+    },
+    "subnet_overlap": {
+      "title": "Camera {camera} paused: address overlap",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Re-check the address block",
+            "description": "The block {block} for {camera} overlaps something on your network ({conflicts}). Fix it as described in the app's documentation, then press submit to check again."
+          }
+        },
+        "error": {
+          "still_blocked": "The block is still in conflict.",
+          "app_unavailable": "The Dashcam Sync app did not answer."
+        }
+      },
+      "description": "While connected, Home Assistant would send traffic for {block} to the car. The check found a conflict: {result} ({conflicts}). The camera stays paused until the check passes."
+    },
+    "default_route_changed": {
+      "title": "Wi-Fi disconnected: default route moved",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Disconnect the Wi-Fi",
+            "description": "After joining {camera}'s Wi-Fi the default route is no longer on the wired interface. Submit to disconnect the Wi-Fi profile now."
+          }
+        },
+        "error": {
+          "wifi_unavailable": "Home Assistant could not change the Wi-Fi. Remove the profile under Settings > System > Network.",
+          "app_unavailable": "The Dashcam Sync app did not answer."
+        }
+      },
+      "description": "The default route moved away from the wired interface while connected to {camera}. The integration disconnects the Wi-Fi profile; if this issue stays, remove the profile under Settings > System > Network."
+    },
+    "camera_playback_mode": {
+      "title": "{camera} may be stuck in playback mode",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Restore recording",
+            "description": "Submit to tell {camera} to go back to recording."
+          }
+        },
+        "error": {
+          "app_unavailable": "The Dashcam Sync app did not answer or the camera is out of range."
+        }
+      },
+      "description": "The camera was left in playback mode and is not recording. Restore recording as soon as it is in range; the app also retries on every contact."
+    },
+    "unsupported_camera": {
+      "title": "{camera} is not supported",
+      "description": "No driver recognises this camera. Open the Dashcam Sync panel, press Capture device profile, and attach the result to a GitHub issue."
+    },
+    "listing_keeps_failing": {
+      "title": "{camera} keeps failing to list files",
+      "description": "The camera answers but listing its files failed three visits in a row. Capture a device profile in the Dashcam Sync panel and attach it to a GitHub issue."
+    },
+    "network_target_offline": {
+      "title": "Network storage offline for over an hour",
+      "description": "New clips are being spooled locally. Check the network storage under Settings > System > Storage."
+    },
+    "storage_low": {
+      "title": "Storage below the minimum free space",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Run retention now",
+            "description": "{target} has {free_percent}% free. Submit to run the retention rules now."
+          }
+        },
+        "error": {
+          "app_unavailable": "The Dashcam Sync app did not answer."
+        }
+      },
+      "description": "{target} is at {free_percent}% free, below the configured minimum. Clips are not written until space recovers."
+    },
+    "api_mismatch": {
+      "title": "App and integration versions do not match",
+      "description": "The app speaks API version {app_api} and this integration speaks {integration_api}. Update the app and the integration to the same release."
+    },
+    "announced_wifi_adapter": {
+      "title": "Home Assistant announces itself on the Wi-Fi adapter",
+      "description": "The adapter(s) {adapters} are enabled under Settings > System > Network > Network adapter. Turn them off so Home Assistant does not announce itself on the dashcam's network."
+    },
+    "app_unreachable": {
+      "title": "The Dashcam Sync app is unreachable",
+      "description": "Check that the app is running."
+    }
+  }
+}

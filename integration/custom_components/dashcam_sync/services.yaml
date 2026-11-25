@@ -1,0 +1,33 @@
+sync:
+  target:
+    entity:
+      integration: dashcam_sync
+    device:
+      integration: dashcam_sync
+keep_clip:
+  fields:
+    media_content_id:
+      required: true
+      example: "media-source://dashcam_sync/clip/42"
+      selector:
+        text:
+unkeep_clip:
+  fields:
+    media_content_id:
+      required: true
+      example: "media-source://dashcam_sync/clip/42"
+      selector:
+        text:
+delete_clip:
+  fields:
+    media_content_id:
+      required: true
+      example: "media-source://dashcam_sync/clip/42"
+      selector:
+        text:
+purge:
+  fields:
+    dry_run:
+      default: false
+      selector:
+        boolean:

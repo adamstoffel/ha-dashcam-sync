@@ -134,6 +134,7 @@ async def test_api_requires_a_token_but_healthz_does_not(stack: Stack) -> None:
         assert r.status == 200
     status, body = await stack.get("/api/v1/info")
     assert status == 200 and body["api_version"] == 1 and body["name"] == "Dashcam Sync"
+    assert len(body["instance"]) == 16 and TOKEN not in body["instance"]
 
 
 async def test_ui_only_accepts_the_ingress_proxy(
@@ -484,6 +485,9 @@ async def test_storage_endpoint_and_logs(stack: Stack) -> None:
     _, logs = await stack.get("/api/v1/logs?lines=5")
     assert isinstance(logs["lines"], list)
     assert (await stack.get("/api/v1/logs?lines=zzz"))[0] == 200
+    _, sessions = await stack.get("/api/v1/sessions?limit=5&camera=car")
+    assert isinstance(sessions, list)
+    assert (await stack.get("/api/v1/sessions?limit=x"))[0] == 200
     _, opts = await stack.get("/api/v1/options")
     assert opts["storage"]["target"] == "local"
 

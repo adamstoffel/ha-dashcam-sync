@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import json
 import logging
@@ -116,6 +117,7 @@ async def info(request: web.Request) -> web.Response:
             "api_version": API_VERSION,
             "app_version": __version__,
             "name": "Dashcam Sync",
+            "instance": hashlib.sha256(d.token.encode()).hexdigest()[:16],
             "cameras": len(d.workers),
         }
     )
@@ -420,6 +422,15 @@ async def storage(request: web.Request) -> web.Response:
     return web.json_response(_daemon(request).storage_payload())
 
 
+async def sessions(request: web.Request) -> web.Response:
+    d = _daemon(request)
+    try:
+        limit = max(1, min(int(request.query.get("limit", "50")), 200))
+    except ValueError:
+        limit = 50
+    return web.json_response(d.cat.recent_sessions(limit, request.query.get("camera")))
+
+
 async def logs(request: web.Request) -> web.Response:
     d = _daemon(request)
     try:
@@ -612,6 +623,7 @@ def _add_routes(app: web.Application) -> None:
     r.add_post(f"{API}/purge", purge)
     r.add_get(f"{API}/storage", storage)
     r.add_get(f"{API}/logs", logs)
+    r.add_get(f"{API}/sessions", sessions)
     r.add_get(f"{API}/options", options_get)
     r.add_get(f"{API}/wizard/wifi-scan", wizard_wifi_scan)
     r.add_post(f"{API}/wizard/probe", wizard_probe)
