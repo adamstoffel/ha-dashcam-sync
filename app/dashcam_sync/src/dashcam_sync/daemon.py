@@ -178,6 +178,7 @@ class Daemon:
         )
         self.post.start()
         self._build_storage()
+        self._resume_post_processing()
         await self.network.refresh()
         self._sync_workers()
 
@@ -197,6 +198,18 @@ class Daemon:
             self._tasks.append(asyncio.create_task(coro))
         await self._announce()
         _LOGGER.info("Dashcam Sync %s started with %d camera(s)", __version__, len(self.workers))
+
+    def _resume_post_processing(self) -> None:
+        """Clips whose post-processing was interrupted by a stop or crash are picked up again."""
+        assert self.post is not None
+        resumed = 0
+        for target in (TARGET_LOCAL, "spool"):
+            for clip, copy in self.cat.copies_for_target(target):
+                if clip.post_status == "pending" and copy.path and Path(copy.path).exists():
+                    self.post.submit(clip.id, Path(copy.path))
+                    resumed += 1
+        if resumed:
+            _LOGGER.info("Resuming post-processing of %d clip(s)", resumed)
 
     async def _serve(self, app: web.Application, port: int) -> None:
         runner = web.AppRunner(app, access_log=None, shutdown_timeout=5.0)
@@ -420,6 +433,8 @@ class Daemon:
                 self.storage.ship_pending()
         except OSError as err:
             _LOGGER.warning("Shipping to the network target failed: %s", err)
+        except Exception:  # never let one bad copy stop shipping for good
+            _LOGGER.exception("Shipping to the network target failed")
 
     async def _after_session(self) -> None:
         """Retention runs after each sync as well as daily."""
@@ -573,13 +588,16 @@ class Daemon:
     async def _ship_loop(self) -> None:
         while True:
             await asyncio.sleep(SHIP_INTERVAL)
-            await asyncio.to_thread(self._ship_safely)
+            try:
+                await asyncio.to_thread(self._ship_safely)
+            except Exception:
+                _LOGGER.exception("Shipping loop iteration failed")
 
     # --------------------------------------------------------------- payloads
 
     def clip_payload(self, clip_id: int) -> dict[str, Any] | None:
         clip = self.cat.get_clip(clip_id)
-        if clip is None:
+        if clip is None or clip.status == "deleted":
             return None
         copies = self.cat.copies(clip_id)
         best = None

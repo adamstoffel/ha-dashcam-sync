@@ -16,7 +16,12 @@ from fakecam import FakeCamera
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.dashcam_sync.const import CONF_HOST, CONF_PORT, CONF_TOKEN, DOMAIN
+from custom_components.dashcam_sync.const import (
+    CONF_HOST,
+    CONF_PORT,
+    CONF_TOKEN,
+    DOMAIN,
+)
 from dashcam_sync.daemon import Daemon, DaemonConfig
 from dashcam_sync.engine import Timing
 
@@ -42,7 +47,13 @@ async def camera() -> AsyncIterator[FakeCamera]:
     cam = FakeCamera("novatek")
     await cam.start()
     cam.add_novatek("20261122_101500_F.MP4", 60_000, time="2026/11/22 10:15:00")
-    cam.add_novatek("20261122_101600_F.MP4", 30_000, folder="MOVIE\\RO", time="2026/11/22 10:16:00", attr=33)
+    cam.add_novatek(
+        "20261122_101600_F.MP4",
+        30_000,
+        folder="MOVIE\\RO",
+        time="2026/11/22 10:16:00",
+        attr=33,
+    )
     yield cam
     await cam.stop()
 
@@ -76,12 +87,18 @@ async def daemon(tmp_path: Path, camera: FakeCamera) -> AsyncIterator[Daemon]:
 
 
 @pytest.fixture
-async def stack(hass: HomeAssistant, daemon: Daemon, camera: FakeCamera, tmp_path: Path) -> Stack:
+async def stack(
+    hass: HomeAssistant, daemon: Daemon, camera: FakeCamera, tmp_path: Path
+) -> Stack:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="Dashcam Sync",
         unique_id="e2e",
-        data={CONF_HOST: "127.0.0.1", CONF_PORT: daemon.bound_port(0), CONF_TOKEN: TOKEN},
+        data={
+            CONF_HOST: "127.0.0.1",
+            CONF_PORT: daemon.bound_port(0),
+            CONF_TOKEN: TOKEN,
+        },
     )
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)

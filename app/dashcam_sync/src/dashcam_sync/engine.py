@@ -290,11 +290,17 @@ class CameraWorker:
     # ----------------------------------------------------------------- main
 
     async def run(self) -> None:
-        try:
-            while not self._stopping:
+        """Run until stopped. One bad tick must never end this camera's worker."""
+        while not self._stopping:
+            try:
                 await self._tick()
-        except asyncio.CancelledError:
-            raise
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.exception("%s: unexpected error, carrying on", self.camera.id)
+                self.status.error = "internal error, see the log"
+                self.publish_status()
+                await self._sleep(self.ctx.timing.poll)
 
     async def _tick(self) -> None:
         cam = self.camera
@@ -317,15 +323,19 @@ class CameraWorker:
             return
 
         self._set_connected(True)
+        manual, self._manual = self._manual, False
+        if self._restore_requested:
+            # Explicit requests are honoured even when the backoff is exhausted: that is
+            # exactly when a camera is most likely to be stuck in playback mode.
+            self._restore_requested = False
+            await self._standalone_restore()
+            return
+        if manual:
+            self._need_relink = False
+            self._failures = 0
         if self._need_relink:
             # Backoff exhausted: wait for the link to drop and come back.
             await self._sleep(self._poll_interval())
-            return
-
-        manual, self._manual = self._manual, False
-        if self._restore_requested:
-            self._restore_requested = False
-            await self._standalone_restore()
             return
         if self._should_sync(manual):
             result = await self._run_session()
@@ -370,7 +380,7 @@ class CameraWorker:
         try:
             driver = await self._detect()
             await self._restore(driver)
-        except (CameraError, UnsupportedCamera) as err:
+        except (CameraError, UnsupportedCamera, TimeoutError, OSError) as err:
             self.status.error = str(err)
             self._set(ERROR)
         else:
@@ -387,7 +397,9 @@ class CameraWorker:
             self.status.restore_pending = True
             self.status.error = f"restore failed: {err}"
             self.publish_status()
-            raise
+            if isinstance(err, CameraError):
+                raise
+            raise LinkLost(f"restore failed: {err or type(err).__name__}") from err
         self.ctx.flags.clear(self.camera.id)
         self.status.restore_pending = False
         if self.status.error and self.status.error.startswith("restore failed"):
@@ -491,6 +503,9 @@ class CameraWorker:
         except asyncio.CancelledError:
             stats.result = "cancelled"
             raise
+        except Exception as err:
+            _LOGGER.exception("%s: unexpected error in a session", cam.id)
+            stats.result, stats.error = "error", f"{type(err).__name__}: {err}"
         finally:
             if driver is not None and needs_restore:
                 await self._restore_in_finally(driver)
@@ -591,7 +606,7 @@ class CameraWorker:
     ) -> None:
         storage = self.ctx.storage()
         catalog = self.ctx.catalog
-        dest = storage.primary_destination(rec.size)
+        dest = await asyncio.to_thread(storage.primary_destination, rec.size)
         part = self._part_path(row, dest)
         part.parent.mkdir(parents=True, exist_ok=True)
 

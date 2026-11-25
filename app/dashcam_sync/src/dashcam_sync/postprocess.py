@@ -114,7 +114,7 @@ class PostProcessor:
         self._task: asyncio.Task[None] | None = None
 
     def start(self) -> None:
-        if self._task is None:
+        if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._worker(), name="postprocess")
 
     async def stop(self) -> None:
@@ -152,7 +152,10 @@ class PostProcessor:
                 if self._on_done is not None:
                     fresh = self.catalog.get_clip(clip_id)
                     if fresh is not None:
-                        await self._on_done(fresh, result_path)
+                        try:
+                            await self._on_done(fresh, result_path)
+                        except Exception:
+                            _LOGGER.exception("Post-processing callback for %s failed", path.name)
             finally:
                 self._queue.task_done()
 

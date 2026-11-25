@@ -102,7 +102,7 @@ Retention runs daily at `purge_time` and after each sync, for each target on its
 | `max_total_gb` | 200 | none (0) | Oldest-first delete until under the cap. |
 | `min_free_percent` | 10 | 5 | Oldest-first delete until free space recovers. |
 
-The network rules are the same option names prefixed with `network_`. Size-based deletion removes normal, then parking, then photo clips, and event clips only if still needed, oldest first in each. A clip you mark **Keep** (the Clips page, or the `dashcam_sync.keep_clip` action) is never deleted by any rule. Use **Dry run** on the Storage page to see what the next purge would remove.
+The network rules are the same option names prefixed with `network_`. Size-based deletion removes normal, then parking, then photo clips, and event clips only if still needed, oldest first in each. A clip's age is counted from its start time but never from earlier than when it was downloaded, so a camera whose clock was reset (many cameras without GPS fall back to 1970 or 2014 after a power loss) cannot make fresh clips expire. Deleted and purged clips are remembered, so the app does not download them again while they are still on the camera's card. A clip you mark **Keep** (the Clips page, or the `dashcam_sync.keep_clip` action) is never deleted by any rule. Use **Dry run** on the Storage page to see what the next purge would remove.
 
 ### Sync
 

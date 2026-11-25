@@ -15,5 +15,16 @@ First version. See `app/dashcam_sync/CHANGELOG.md` for the app side.
   - a non-list `cameras` option crashed option parsing;
   - a malformed WebSocket frame could drop the integration's socket;
   - four hassfest errors (services target filter, HTML-like and URL text in translations, `fix_flow` beside `description`).
+- Found by an independent code review, each fixed with a regression test that fails without the fix:
+  - fresh clips from a camera with a reset clock were purged straight after download (age is now counted from download time at the earliest);
+  - a deleted or purged clip was downloaded again at the next visit (deletions now leave a tombstone);
+  - an unexpected error was recorded as a successful sync and could end a camera's worker for good (the worker now survives any tick, and unexpected errors are failed sessions);
+  - *Restore recording* and *Sync now* were ignored once the retry backoff was exhausted;
+  - clips still being remuxed could be copied to the NAS as raw `.ts` without thumbnail or sidecar;
+  - a failing callback or a renamed `local_folder` could kill shipping and post-processing until restart; interrupted post-processing now resumes on start;
+  - the host check could be bypassed with userinfo (`ip:x@internal-host`) or IPv4-mapped IPv6 addresses;
+  - `PATCH /cameras/{id}` accepted invalid values that made the camera vanish on reload;
+  - mount probes ran on the event loop, so a hung share could freeze the API and every download;
+  - the panel's camera selector sent you to the Overview.
 - Hardening: the wizard refuses public, loopback and Home Assistant-internal hosts; option edits are serialised.
 - Push updates over a WebSocket with a 30 s poll as the fallback.

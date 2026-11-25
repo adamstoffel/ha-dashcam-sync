@@ -75,7 +75,11 @@ async def main(demo: bool) -> None:
                             "enabled": True,
                         }  # fmt: skip
                     ],
-                    "sync": {"mode": "everything", "remux_to_mp4": False, "thumbnails": demo},
+                    "sync": {
+                        "mode": "everything",
+                        "remux_to_mp4": False,
+                        "thumbnails": demo,
+                    },
                 },
                 indent=2,
             )

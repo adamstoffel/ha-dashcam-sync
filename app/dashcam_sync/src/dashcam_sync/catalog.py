@@ -224,12 +224,17 @@ class Catalog:
             return _clip(row), True
 
     def is_known_done(self, camera: str, rec: Recording) -> bool:
+        """Already downloaded, or downloaded once and deleted since (a tombstone).
+
+        Deleting a clip keeps its row so the camera's copy, still on the card, is
+        never fetched again.
+        """
         with self._lock:
             row = self._conn.execute(
                 "SELECT status FROM clips WHERE camera=? AND src_path=? AND size=? AND start_ts=?",
                 (camera, rec.path, rec.size, rec.start.timestamp()),
             ).fetchone()
-        return row is not None and row["status"] == "done"
+        return row is not None and row["status"] in ("done", "deleted")
 
     def get_clip(self, clip_id: int) -> ClipRow | None:
         with self._lock:
@@ -300,8 +305,12 @@ class Catalog:
             return cur.rowcount > 0
 
     def delete_clip(self, clip_id: int) -> None:
-        with self._lock:
-            self._conn.execute("DELETE FROM clips WHERE id=?", (clip_id,))
+        """Forget a clip's files but keep a tombstone row (status ``deleted``)."""
+        with self._tx() as conn:
+            conn.execute("DELETE FROM copies WHERE clip_id=?", (clip_id,))
+            conn.execute(
+                "UPDATE clips SET status='deleted', keep=0, part_path=NULL WHERE id=?", (clip_id,)
+            )
 
     def list_clips(
         self,
@@ -349,6 +358,18 @@ class Catalog:
     def latest_clip(self, camera: str, kind: Kind | None = None) -> ClipRow | None:
         rows = self.list_clips(camera=camera, kind=kind, limit=1)
         return rows[0] if rows else None
+
+    def tombstones(self, camera: str | None = None) -> int:
+        with self._lock:
+            if camera:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM clips WHERE status='deleted' AND camera=?", (camera,)
+                ).fetchone()
+            else:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) AS n FROM clips WHERE status='deleted'"
+                ).fetchone()
+        return int(row["n"])
 
     def unfinished(self, camera: str) -> list[ClipRow]:
         with self._lock:

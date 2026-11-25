@@ -17,7 +17,9 @@ DOCS = [
     ROOT / "app" / "dashcam_sync" / "CHANGELOG.md",
     ROOT / "integration" / "README.md",
 ]
-LINK = re.compile(r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)|!\[[^\]]*\]\(([^)\s]+)\)|<img[^>]+src=\"([^\"]+)\"")
+LINK = re.compile(
+    r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)|!\[[^\]]*\]\(([^)\s]+)\)|<img[^>]+src=\"([^\"]+)\""
+)
 
 
 def slug(heading: str) -> str:
@@ -27,7 +29,10 @@ def slug(heading: str) -> str:
 
 
 def anchors(path: Path) -> set[str]:
-    return {slug(m.group(1)) for m in re.finditer(r"^#{1,6}\s+(.+)$", path.read_text(), re.M)}
+    return {
+        slug(m.group(1))
+        for m in re.finditer(r"^#{1,6}\s+(.+)$", path.read_text(), re.M)
+    }
 
 
 @pytest.mark.parametrize("doc", sorted(DOCS), ids=lambda p: str(p.relative_to(ROOT)))
@@ -55,4 +60,7 @@ def test_screenshots_exist_and_are_real_pngs() -> None:
 
 def test_my_links_point_at_this_repository() -> None:
     readme = (ROOT / "README.md").read_text()
-    assert "repository_url=https%3A%2F%2Fgithub.com%2Fadamstoffel%2Fha-dashcam-sync" in readme
+    assert (
+        "repository_url=https%3A%2F%2Fgithub.com%2Fadamstoffel%2Fha-dashcam-sync"
+        in readme
+    )

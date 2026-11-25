@@ -19,18 +19,34 @@ INTERNAL_NETWORK = ipaddress.ip_network("172.30.32.0/23")
 BLOCKED_NAMES = frozenset({"supervisor", "homeassistant", "hassio", "core-ssh", "localhost"})
 
 
+_FORBIDDEN = set("@/?#\\ \t\r\n")
+
+
 def _split(host: str) -> str:
+    """The host part of ``host[:port]``; anything that could smuggle a different host is refused."""
     host = host.strip()
-    if host.startswith("[") and "]" in host:
-        return host[1 : host.index("]")]
+    if any(ch in _FORBIDDEN for ch in host):
+        raise ConfigError("a camera address is a host name or IP address, optionally with :port")
+    if host.startswith("["):
+        if "]" not in host:
+            raise ConfigError("malformed IPv6 address")
+        name, rest = host[1 : host.index("]")], host[host.index("]") + 1 :]
+        if rest and not (rest.startswith(":") and rest[1:].isdigit()):
+            raise ConfigError("malformed port")
+        return name
     if host.count(":") == 1:
-        return host.rsplit(":", 1)[0]
+        name, _, port = host.partition(":")
+        if not port.isdigit() or not 0 < int(port) < 65536:
+            raise ConfigError("the port must be a number")
+        return name
     return host
 
 
 def _check_address(
     address: ipaddress.IPv4Address | ipaddress.IPv6Address, allow_loopback: bool
 ) -> None:
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped  # ::ffff:172.30.32.2 is still 172.30.32.2
     if address.is_loopback:
         if allow_loopback:
             return

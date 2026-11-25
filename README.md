@@ -116,7 +116,7 @@ Every claim below is enforced in CI on every push.
 
 | Layer | What it proves | Size |
 | --- | --- | --- |
-| App unit and component tests | Queue order, retention maths, path sanitising, address-block logic, storage health, catalogue, engine state machine | 202 tests, 90 %+ coverage, `ruff`, `mypy --strict` |
+| App unit and component tests | Queue order, retention maths, path sanitising, address-block logic, storage health, catalogue, engine state machine | 232 tests, 90 %+ coverage, `ruff`, `mypy --strict` |
 | Fault injection | A fake camera that drops connections, stalls, lies about lengths, ignores Range, refuses playback or fails to restore: resume, verify and restore always happen, including when the app is cancelled mid-download | part of the above |
 | Property-based fuzzing | Hypothesis tests on the address maths, queue ordering, retention, redaction, local path building and every parser of camera-supplied data (XML, JSON, HTML, mount tables, options) | 13 properties (`DASHCAM_FUZZ=1` runs 3000 examples each nightly) |
 | Driver replay | Every recorded device profile is replayed against every driver: each claims its own family and no other | 4 fixtures |

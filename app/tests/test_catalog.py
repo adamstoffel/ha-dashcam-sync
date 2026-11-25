@@ -71,8 +71,12 @@ def test_keep_and_delete(catalog: Catalog) -> None:
     assert clip is not None and clip.keep and clip.as_dict()["keep"] is True
     assert not catalog.set_keep(999, True)
     catalog.add_copy(row.id, "local", "/a", 1)
-    catalog.delete_clip(row.id)  # cascades to copies
+    catalog.delete_clip(row.id)  # forgets the files, keeps a tombstone
     assert catalog.copies(row.id) == []
+    tomb = catalog.get_clip(row.id)
+    assert tomb is not None and tomb.status == "deleted" and not tomb.keep
+    assert catalog.tombstones("car") == 1 and catalog.tombstones() == 1
+    assert catalog.tombstones("other") == 0
 
 
 def test_sessions_and_failure_streak(catalog: Catalog) -> None:

@@ -28,13 +28,22 @@ def glyph(size: int, bg: bool = True) -> Image.Image:
     cx, cy = s * 0.5, s * 0.46
     for i, r in enumerate((0.12, 0.2, 0.28)):
         rr = s * r
-        d.arc((cx - rr, cy - rr, cx + rr, cy + rr), 215, 325, fill=fg, width=int(s * 0.04))
+        d.arc(
+            (cx - rr, cy - rr, cx + rr, cy + rr), 215, 325, fill=fg, width=int(s * 0.04)
+        )
     d.ellipse((cx - s * 0.025, cy - s * 0.025, cx + s * 0.025, cy + s * 0.025), fill=fg)
     # Car body
     body_top, body_bottom = s * 0.60, s * 0.78
-    d.rounded_rectangle((s * 0.16, body_top, s * 0.84, body_bottom), radius=s * 0.05, fill=fg)
+    d.rounded_rectangle(
+        (s * 0.16, body_top, s * 0.84, body_bottom), radius=s * 0.05, fill=fg
+    )
     d.polygon(
-        [(s * 0.27, body_top), (s * 0.35, s * 0.50), (s * 0.65, s * 0.50), (s * 0.73, body_top)],
+        [
+            (s * 0.27, body_top),
+            (s * 0.35, s * 0.50),
+            (s * 0.65, s * 0.50),
+            (s * 0.73, body_top),
+        ],
         fill=fg,
     )
     # Windows and wheels punched out in the background colour
@@ -49,9 +58,13 @@ def glyph(size: int, bg: bool = True) -> Image.Image:
         fill=hole,
     )
     for x in (0.31, 0.69):
-        d.ellipse((s * (x - 0.07), s * 0.72, s * (x + 0.07), s * 0.86), fill=DARK if bg else fg)
         d.ellipse(
-            (s * (x - 0.03), s * 0.76, s * (x + 0.03), s * 0.82), fill=WHITE if bg else (0, 0, 0, 0)
+            (s * (x - 0.07), s * 0.72, s * (x + 0.07), s * 0.86),
+            fill=DARK if bg else fg,
+        )
+        d.ellipse(
+            (s * (x - 0.03), s * 0.76, s * (x + 0.03), s * 0.82),
+            fill=WHITE if bg else (0, 0, 0, 0),
         )
     return img.resize((size, size), Image.LANCZOS)
 

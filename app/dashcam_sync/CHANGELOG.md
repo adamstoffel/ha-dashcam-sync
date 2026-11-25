@@ -13,3 +13,4 @@ First public version.
 - Panel: refreshes until thumbnails exist; the address-block check is only offered for hotspot cameras.
 - Fixes found by end-to-end and property-based testing: fast shutdown with a connected integration, pushed hub state, persisted last sync and last event clip, robust option parsing.
 - Wizard hosts are validated (private addresses only); option edits are serialised.
+- Fixes from an independent code review: clock-reset cameras no longer lose fresh clips, deleted clips stay deleted, the camera worker survives any error, explicit restore and sync work after the backoff, raw clips are never shipped before post-processing, tighter host validation, validated camera edits, and blocking storage probes moved off the event loop.

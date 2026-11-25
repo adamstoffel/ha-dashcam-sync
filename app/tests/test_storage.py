@@ -112,6 +112,7 @@ def test_network_down_spools_then_ships(tmp_path: Path, catalog: Catalog) -> Non
     final = mgr.place("car", rec, part, dest)
     final.with_suffix(".jpg").write_bytes(b"j")
     catalog.complete_clip(row.id, sha256="s", target=TARGET_SPOOL, path=str(final), size=4)
+    catalog.set_post_status(row.id, "done")
     assert mgr.ship_pending() == 0  # still offline, nothing written to the empty folder
     assert not any(nas.iterdir())
 
@@ -153,6 +154,7 @@ def test_both_writes_local_first_then_ships_copy(tmp_path: Path, catalog: Catalo
     part.write_bytes(b"data")
     final = mgr.place("car", rec, part, dest)
     catalog.complete_clip(row.id, sha256="s", target=TARGET_LOCAL, path=str(final), size=4)
+    catalog.set_post_status(row.id, "done")
     mgr.queue_network_copy(row.id)
     assert catalog.copy(row.id, TARGET_NETWORK).state == COPY_PENDING  # type: ignore[union-attr]
     assert mgr.ship_pending() == 1
@@ -173,6 +175,7 @@ def test_ship_cleans_up_when_local_copy_vanished(tmp_path: Path, catalog: Catalo
         network_folder="nas",
     )
     row, _ = catalog.upsert_recording("car", Recording("/c.mp4", 4, at(9), Kind.NORMAL))
+    catalog.set_post_status(row.id, "done")
     mgr.queue_network_copy(row.id)
     assert mgr.ship_pending() == 0
     assert catalog.copy(row.id, TARGET_NETWORK) is None

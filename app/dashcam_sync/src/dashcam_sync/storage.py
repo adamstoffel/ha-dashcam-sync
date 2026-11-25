@@ -222,6 +222,14 @@ def remove_clip_files(path: Path) -> int:
     return freed
 
 
+def _relative_or_name(path: Path, root: Path, camera_id: str) -> Path:
+    """``path`` relative to ``root``; if the root changed (``local_folder`` edited), keep the name."""
+    try:
+        return path.relative_to(root)
+    except ValueError:
+        return Path(camera_id) / path.name
+
+
 def move_file(src: Path, dst: Path) -> None:
     """Atomic rename when on one filesystem, otherwise copy then replace."""
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -352,23 +360,27 @@ class StorageManager:
         shipped = 0
         # Spooled copies move; ``both`` copies are duplicated and the local one stays.
         for clip, copy in self.catalog.copies_for_target(TARGET_SPOOL, COPY_PRESENT):
+            if clip.post_status == "pending":
+                continue  # still being remuxed: ship the final files, not the raw ones
             src = Path(copy.path)
             if not src.exists():
                 self.catalog.remove_copy(clip.id, TARGET_SPOOL)
                 continue
-            rel = src.relative_to(self.spool.root)
+            rel = _relative_or_name(src, self.spool.root, clip.camera)
             dst = unique_path(self.network.root / rel)
             self._ship_files(src, dst)
             self.catalog.remove_copy(clip.id, TARGET_SPOOL)
             self.catalog.add_copy(clip.id, TARGET_NETWORK, str(dst), dst.stat().st_size)
             shipped += 1
         for clip, copy in self.catalog.copies_for_target(TARGET_NETWORK, COPY_PENDING):
+            if clip.post_status == "pending":
+                continue
             local = self.catalog.copy(clip.id, TARGET_LOCAL)
             if local is None or not Path(local.path).exists():
                 self.catalog.remove_copy(clip.id, TARGET_NETWORK)
                 continue
             src = Path(local.path)
-            rel = src.relative_to(self.local.root)
+            rel = _relative_or_name(src, self.local.root, clip.camera)
             dst = unique_path(self.network.root / rel)
             self._ship_files(src, dst, move=False)
             self.catalog.add_copy(clip.id, TARGET_NETWORK, str(dst), dst.stat().st_size)

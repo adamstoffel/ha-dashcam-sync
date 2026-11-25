@@ -38,7 +38,7 @@ let view = "overview", timer = null, es = null;
 
 async function render() {
   clearInterval(timer);
-  view = location.hash.slice(1).split("/")[0] || "overview";
+  view = location.hash.slice(1).split(/[/?]/)[0] || "overview";
   document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.getAttribute("href") === "#" + view));
   try {
     await ({ overview, cameras, clips, storage, logs }[view] || overview)();

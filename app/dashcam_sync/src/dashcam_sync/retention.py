@@ -78,6 +78,18 @@ class Candidate:
         }
 
 
+def reference_time(clip: ClipRow) -> dt.datetime:
+    """When a clip counts as having been made, for expiry.
+
+    A dashcam without GPS often resets its clock to 1970 or 2014 after a power loss.
+    Ageing such a clip by its own timestamp would delete it right after download, so
+    it never counts as older than the moment it was downloaded.
+    """
+    if clip.done_ts:
+        return max(clip.start, dt.datetime.fromtimestamp(clip.done_ts, tz=dt.UTC))
+    return clip.start
+
+
 def plan_purge(
     items: list[tuple[ClipRow, CopyRow]],
     rules: Rules,
@@ -96,7 +108,7 @@ def plan_purge(
     # Age rules.
     for clip, copy in eligible:
         days = rules.days_for(clip.kind)
-        if days > 0 and clip.start <= now - dt.timedelta(days=days):
+        if days > 0 and reference_time(clip) <= now - dt.timedelta(days=days):
             chosen[clip.id] = Candidate(clip, copy, f"older_than_{days}_days")
 
     def remaining(skip: dict[int, Candidate]) -> list[tuple[ClipRow, CopyRow]]:
@@ -117,7 +129,7 @@ def plan_purge(
         if deficit > 0:
             _evict(chosen, remaining(chosen), int(deficit), "low_free_space")
 
-    return sorted(chosen.values(), key=lambda c: c.clip.start)
+    return sorted(chosen.values(), key=lambda c: reference_time(c.clip))
 
 
 def _evict(
@@ -129,7 +141,7 @@ def _evict(
     """Oldest-first within each kind, kinds in SIZE_ORDER, until ``need`` bytes."""
     freed = 0
     for kind in SIZE_ORDER:
-        ordered = sorted((x for x in pool if x[0].kind is kind), key=lambda x: x[0].start)
+        ordered = sorted((x for x in pool if x[0].kind is kind), key=lambda x: reference_time(x[0]))
         for clip, copy in ordered:
             if freed >= need:
                 return

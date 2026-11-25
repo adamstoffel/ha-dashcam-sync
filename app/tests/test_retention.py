@@ -156,7 +156,7 @@ def test_service_dry_run_then_real_purge(tmp_path: Path, catalog: Catalog) -> No
     assert [c.clip.id for c in report.deleted] == [old_row.id]
     assert not old_path.exists()
     assert not old_path.with_suffix(".jpg").exists()
-    assert catalog.get_clip(old_row.id) is None
+    assert catalog.get_clip(old_row.id).status == "deleted"  # type: ignore[union-attr]
     assert new_path.exists() and catalog.get_clip(new_row.id) is not None
     assert report.as_dict()["count"] == 1
 
@@ -165,7 +165,9 @@ def test_delete_clip_everywhere(tmp_path: Path, catalog: Catalog) -> None:
     svc, storage = make_service(tmp_path, catalog)
     row, path = add_clip(catalog, storage, "c", Kind.EVENT, NOW)
     assert svc.delete_clip_everywhere(row.id) == 11
-    assert not path.exists() and catalog.get_clip(row.id) is None
+    assert not path.exists()
+    gone = catalog.get_clip(row.id)
+    assert gone is not None and gone.status == "deleted"  # a tombstone, not a hole
 
 
 def test_seconds_until() -> None:

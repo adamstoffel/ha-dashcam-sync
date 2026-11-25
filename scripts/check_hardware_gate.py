@@ -63,7 +63,9 @@ def main(argv: list[str]) -> int:
         return 0
     path = ROOT / "docs" / "hardware-gate" / f"{version}.md"
     if not path.exists():
-        print(f"ERROR: {path.relative_to(ROOT)} does not exist; run the hardware matrix first")
+        print(
+            f"ERROR: {path.relative_to(ROOT)} does not exist; run the hardware matrix first"
+        )
         return 1
     problems = validate(path.read_text())
     for problem in problems:

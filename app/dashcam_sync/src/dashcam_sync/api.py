@@ -126,7 +126,7 @@ async def info(request: web.Request) -> web.Response:
 
 
 async def status(request: web.Request) -> web.Response:
-    return web.json_response(_daemon(request).status_payload())
+    return web.json_response(await asyncio.to_thread(_daemon(request).status_payload))
 
 
 async def websocket(request: web.Request) -> web.StreamResponse:
@@ -135,7 +135,7 @@ async def websocket(request: web.Request) -> web.StreamResponse:
     await ws.prepare(request)
     request.app[SOCKETS].add(ws)
     queue = d.bus.subscribe()
-    await ws.send_json({"type": "snapshot", **d.status_payload()})
+    await ws.send_json({"type": "snapshot", **await asyncio.to_thread(d.status_payload)})
 
     async def pump() -> None:
         while True:
@@ -146,7 +146,9 @@ async def websocket(request: web.Request) -> web.StreamResponse:
     try:
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.TEXT and msg.data == "snapshot":
-                await ws.send_json({"type": "snapshot", **d.status_payload()})
+                await ws.send_json(
+                    {"type": "snapshot", **await asyncio.to_thread(d.status_payload)}
+                )
             elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):
                 break
     finally:
@@ -228,6 +230,10 @@ async def camera_patch(request: web.Request) -> web.Response:
     unknown = set(body) - allowed
     if unknown:
         return _error(400, f"cannot change {sorted(unknown)}")
+    try:  # validate the merged entry: a bad value must not make the camera vanish
+        CameraOptions.model_validate({**cam.model_dump(exclude_none=True), **body})
+    except ValueError as err:
+        return _error(400, str(err).splitlines()[0])
 
     def mutate(raw: dict[str, Any]) -> None:
         for entry in raw.get("cameras", []):
@@ -427,7 +433,7 @@ async def purge(request: web.Request) -> web.Response:
 
 
 async def storage(request: web.Request) -> web.Response:
-    return web.json_response(_daemon(request).storage_payload())
+    return web.json_response(await asyncio.to_thread(_daemon(request).storage_payload))
 
 
 async def sessions(request: web.Request) -> web.Response:
@@ -534,9 +540,10 @@ async def wizard_block(request: web.Request) -> web.Response:
 
 async def wizard_storage_test(request: web.Request) -> web.Response:
     d = _daemon(request)
+    health = await asyncio.to_thread(d.store_.health)
     return web.json_response(
         {
-            "targets": {k: v.as_dict() for k, v in d.store_.health().items()},
+            "targets": {k: v.as_dict() for k, v in health.items()},
             "network_folder_mounted": (
                 d.store_.network_mount_ok(d.options.storage.network_folder)
                 if d.options.storage.network_folder
