@@ -1,0 +1,143 @@
+{
+ "app_version": "2026.11.0",
+ "camera_host": "127.0.0.1",
+ "limits": {
+  "max_body": 4194304,
+  "root_bytes": 65536
+ },
+ "ports": {
+  "46137": true
+ },
+ "profile_version": 1,
+ "responses": {
+  "GET /": {
+   "headers": {
+    "Content-Length": "105",
+    "Content-Type": "text/html; charset=utf-8",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 200,
+   "text": "<html><title>Index of /</title><body><h1>Index of /</h1><a href=\"/record/\">/record/</a><br></body></html>"
+  },
+  "GET /?custom=1&cmd=3012": {
+   "headers": {
+    "Content-Length": "105",
+    "Content-Type": "text/html; charset=utf-8",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 200,
+   "text": "<html><title>Index of /</title><body><h1>Index of /</h1><a href=\"/record/\">/record/</a><br></body></html>"
+  },
+  "GET /?custom=1&cmd=3016": {
+   "headers": {
+    "Content-Length": "105",
+    "Content-Type": "text/html; charset=utf-8",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 200,
+   "text": "<html><title>Index of /</title><body><h1>Index of /</h1><a href=\"/record/\">/record/</a><br></body></html>"
+  },
+  "GET /CARDV/": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  },
+  "GET /CARDV/MOVIE/": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  },
+  "GET /Config/version.bin": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  },
+  "GET /DCIM/": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  },
+  "GET /api/info": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  },
+  "GET /app/getproductinfo": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  },
+  "GET /blackvue_vod.cgi": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  },
+  "GET /cgi-bin/Config.cgi": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  },
+  "GET /cgi-bin/Config.cgi?action=get&property=Camera.Menu.FWversion": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  },
+  "GET /command/command.cgi?op=100": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  },
+  "GET /index.html": {
+   "headers": {
+    "Content-Length": "0",
+    "Date": "Wed, 25 Nov 2026 07:17:48 GMT",
+    "Server": "Python/3.13 aiohttp/3.14.5"
+   },
+   "status": 404,
+   "text": ""
+  }
+ }
+}

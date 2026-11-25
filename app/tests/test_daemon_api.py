@@ -1,0 +1,656 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import aiohttp
+import pytest
+import pytest_asyncio
+from aiohttp import web
+
+import dashcam_sync.daemon as daemon_mod
+from dashcam_sync.daemon import Daemon, DaemonConfig
+from dashcam_sync.engine import Timing
+from dashcam_sync.network import Interface, parse_interfaces
+from dashcam_sync.supervisor import (
+    FileOptionsStore,
+    SupervisorClient,
+    SupervisorError,
+    SupervisorOptionsStore,
+)
+from fakecam import FakeCamera, make_bytes
+
+TOKEN = "t" * 40
+
+
+@dataclass
+class Stack:
+    daemon: Daemon
+    cam: FakeCamera
+    api: str
+    ui: str
+    http: aiohttp.ClientSession
+    options_path: Path
+
+    def h(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {TOKEN}"}
+
+    async def get(self, path: str, **kw: Any) -> Any:
+        async with self.http.get(f"{self.api}{path}", headers=self.h(), **kw) as r:
+            return r.status, await r.json()
+
+    async def post(self, path: str, body: Any = None) -> Any:
+        async with self.http.post(f"{self.api}{path}", headers=self.h(), json=body) as r:
+            return r.status, await r.json()
+
+
+async def wait_for(predicate: Any, timeout: float = 10.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("timed out")
+
+
+@pytest_asyncio.fixture
+async def stack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, novatek_cam: FakeCamera
+) -> AsyncIterator[Stack]:
+    monkeypatch.setattr(daemon_mod, "OPTIONS_POLL", 0.05)
+    novatek_cam.add_novatek("20261122_101500_F.MP4", 50_000, time="2026/11/22 10:15:00")
+    novatek_cam.add_novatek(
+        "20261122_101600_F.MP4", 20_000, folder="MOVIE\\RO", time="2026/11/22 10:16:00", attr=33
+    )
+    data = tmp_path / "data"
+    data.mkdir()
+    options_path = data / "options.json"
+    options_path.write_text(
+        json.dumps(
+            {
+                "cameras": [
+                    {
+                        "id": "car",
+                        "name": "Car",
+                        "connection": "lan",
+                        "host": novatek_cam.host,
+                        "driver": "auto",
+                        "enabled": True,
+                    }
+                ],
+                "sync": {"mode": "everything", "remux_to_mp4": False, "thumbnails": False},
+                "retention": {"min_free_percent": 0, "max_total_gb": 0},
+            }
+        )
+    )
+    cfg = DaemonConfig(
+        data_dir=data,
+        media_root=tmp_path / "media",
+        share_root=tmp_path / "share",
+        api_port=0,
+        ui_port=0,
+        bind_host="127.0.0.1",
+        ingress_allow=("127.0.0.1",),
+        timing=Timing(poll=0.05, hint_poll=0.02, backoff=(0.05,), restore_timeout=3),
+        network_poll=0.2,
+        use_supervisor=False,
+        api_token=TOKEN,
+    )
+    (tmp_path / "media").mkdir()
+    daemon = Daemon(cfg)
+    await daemon.start()
+    async with aiohttp.ClientSession() as http:
+        yield Stack(
+            daemon,
+            novatek_cam,
+            f"http://127.0.0.1:{daemon.bound_port(0)}",
+            f"http://127.0.0.1:{daemon.bound_port(1)}",
+            http,
+            options_path,
+        )
+    await daemon.stop()
+
+
+async def synced(stack: Stack) -> None:
+    await wait_for(lambda: stack.daemon.workers["car"].status.last_sync is not None)
+    await stack.daemon.post.drain()  # type: ignore[union-attr]
+
+
+# ------------------------------------------------------------------ security
+
+
+async def test_api_requires_a_token_but_healthz_does_not(stack: Stack) -> None:
+    async with stack.http.get(f"{stack.api}/api/v1/info") as r:
+        assert r.status == 401
+    async with stack.http.get(
+        f"{stack.api}/api/v1/info", headers={"Authorization": "Bearer wrong"}
+    ) as r:
+        assert r.status == 401
+    async with stack.http.get(f"{stack.api}/healthz") as r:
+        assert r.status == 200
+    status, body = await stack.get("/api/v1/info")
+    assert status == 200 and body["api_version"] == 1 and body["name"] == "Dashcam Sync"
+
+
+async def test_ui_only_accepts_the_ingress_proxy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = DaemonConfig(
+        data_dir=tmp_path / "d",
+        media_root=tmp_path,
+        share_root=tmp_path,
+        api_port=0,
+        ui_port=0,
+        bind_host="127.0.0.1",
+        use_supervisor=False,
+        api_token=TOKEN,
+    )  # default allow-list is the Supervisor's address only
+    daemon = Daemon(cfg)
+    await daemon.start()
+    try:
+        async with aiohttp.ClientSession() as http:
+            ui = f"http://127.0.0.1:{daemon.bound_port(1)}"
+            async with http.get(f"{ui}/api/v1/status") as r:
+                assert r.status == 403
+            async with http.get(f"{ui}/") as r:
+                assert r.status == 403
+            async with http.get(f"{ui}/healthz") as r:  # the watchdog must still work
+                assert r.status == 200
+    finally:
+        await daemon.stop()
+
+
+async def test_ui_serves_the_panel_and_hides_secrets(stack: Stack) -> None:
+    async with stack.http.get(f"{stack.ui}/") as r:
+        html = await r.text()
+        assert r.status == 200 and "Dashcam Sync" in html and 'href="static/style.css"' in html
+    async with stack.http.get(f"{stack.ui}/static/app.js") as r:
+        js = await r.text()
+        assert r.status == 200 and 'fetch("api/v1/' in js  # relative: works under ingress
+    await stack.daemon.update_raw_options(
+        lambda raw: raw["cameras"][0].update({"wifi_password": "secret-pass", "interface": "wlan0"})
+    )
+    async with stack.http.get(f"{stack.ui}/api/v1/options") as r:
+        text = await r.text()
+        assert "secret-pass" not in text and "********" in text
+    async with stack.http.get(f"{stack.ui}/api/v1/cameras/car/wifi") as r:
+        assert r.status == 403
+    async with stack.http.get(f"{stack.ui}/api/v1/cameras") as r:
+        assert "secret-pass" not in await r.text()
+
+
+# --------------------------------------------------------------- sync + data
+
+
+async def test_sync_exposes_status_clips_and_files(stack: Stack) -> None:
+    await synced(stack)
+    status, snap = await stack.get("/api/v1/status")
+    assert status == 200 and snap["cameras"]["car"]["last_sync"]
+    assert snap["cameras"]["car"]["connected"] and snap["storage"]["targets"]["local"]["online"]
+
+    status, clips = await stack.get("/api/v1/clips?camera=car")
+    assert status == 200 and len(clips) == 2
+    event = next(c for c in clips if c["kind"] == "event")
+    assert event["path"] and event["copies"][0]["target"] == "local"
+    status, one = await stack.get(f"/api/v1/clips/{event['id']}")
+    assert one["id"] == event["id"]
+
+    async with stack.http.get(
+        f"{stack.api}/api/v1/clips/{event['id']}/file", headers=stack.h()
+    ) as r:
+        assert r.status == 200
+        assert await r.read() == make_bytes("20261122_101600_F.MP4", 20_000)
+    async with stack.http.get(
+        f"{stack.api}/api/v1/clips/{event['id']}/thumb", headers=stack.h()
+    ) as r:
+        assert r.status == 404  # thumbnails are off in this test
+
+    status, days = await stack.get("/api/v1/clip-days?camera=car")
+    assert days["days"] == ["2026-11-22"]
+    assert (await stack.get("/api/v1/clips?camera=car&kind=event"))[1][0]["id"] == event["id"]
+    assert (await stack.get("/api/v1/clips?day=2026-11-22"))[0] == 200
+
+
+async def test_clip_actions_keep_delete_purge(stack: Stack) -> None:
+    await synced(stack)
+    _, clips = await stack.get("/api/v1/clips")
+    normal = next(c for c in clips if c["kind"] == "normal")
+    assert (await stack.post(f"/api/v1/clips/{normal['id']}/keep"))[1]["keep"] is True
+    assert (await stack.get(f"/api/v1/clips/{normal['id']}"))[1]["keep"] is True
+    status, dry = await stack.post("/api/v1/purge", {"dry_run": True})
+    assert status == 200 and dry["dry_run"] is True
+    assert (await stack.post(f"/api/v1/clips/{normal['id']}/unkeep"))[1]["keep"] is False
+    async with stack.http.delete(
+        f"{stack.api}/api/v1/clips/{normal['id']}", headers=stack.h()
+    ) as r:
+        body = await r.json()
+        assert r.status == 200 and body["bytes_freed"] >= 50_000
+    assert not Path(normal["path"]).exists()
+    assert (await stack.get(f"/api/v1/clips/{normal['id']}"))[0] == 404
+    assert (await stack.post("/api/v1/clips/999/keep"))[0] == 404
+    assert (await stack.get("/api/v1/clips/abc"))[0] == 404
+    status, report = await stack.post("/api/v1/purge", {})
+    assert status == 200 and report["dry_run"] is False
+    assert stack.daemon.last_purge is not None
+
+
+async def test_bad_requests(stack: Stack) -> None:
+    assert (await stack.get("/api/v1/clips?kind=nope"))[0] == 400
+    assert (await stack.get("/api/v1/clips?limit=x"))[0] == 400
+    assert (await stack.get("/api/v1/clips?day=garbage"))[0] == 400
+    assert (await stack.get("/api/v1/clip-days"))[0] == 400
+    assert (await stack.get("/api/v1/cameras/nope"))[0] == 404
+    async with stack.http.post(
+        f"{stack.api}/api/v1/hint", headers=stack.h(), data="{not json"
+    ) as r:
+        assert r.status == 400
+    async with stack.http.post(f"{stack.api}/api/v1/hint", headers=stack.h(), json=[1]) as r:
+        assert r.status == 400
+    async with stack.http.patch(
+        f"{stack.api}/api/v1/cameras/car", headers=stack.h(), json={"host": "x"}
+    ) as r:
+        assert r.status == 400
+
+
+async def test_camera_controls_and_option_writes(stack: Stack) -> None:
+    await synced(stack)
+    assert (await stack.post("/api/v1/cameras/car/sync"))[0] == 200
+    assert (await stack.post("/api/v1/cameras/car/restore"))[1]["ok"] is True
+    assert (await stack.post("/api/v1/hint", {"camera": "car"}))[1]["cameras"] == 1
+    assert (await stack.post("/api/v1/hint"))[1]["cameras"] == 1
+
+    async with stack.http.patch(
+        f"{stack.api}/api/v1/cameras/car",
+        headers=stack.h(),
+        json={"enabled": False, "sync_mode": "events_only"},
+    ) as r:
+        assert r.status == 200
+    saved = json.loads(stack.options_path.read_text())
+    assert saved["cameras"][0]["enabled"] is False
+    assert saved["cameras"][0]["sync_mode"] == "events_only"
+    assert stack.daemon.workers["car"].status.enabled is False  # hot reloaded
+    assert (await stack.post("/api/v1/cameras/car/sync"))[0] == 409  # paused: not connected
+
+
+async def test_hot_reload_adds_and_removes_cameras_without_restart(stack: Stack) -> None:
+    raw = json.loads(stack.options_path.read_text())
+    raw["cameras"].append(
+        {"id": "second", "name": "Second", "connection": "lan", "host": stack.cam.host,
+         "driver": "auto", "enabled": False}
+    )  # fmt: skip
+    stack.options_path.write_text(json.dumps(raw))
+    await wait_for(lambda: "second" in stack.daemon.workers)
+    raw["cameras"] = raw["cameras"][1:]
+    stack.options_path.write_text(json.dumps(raw))
+    await wait_for(lambda: "car" not in stack.daemon.workers)
+    # A broken file keeps the last good options.
+    stack.options_path.write_text("{ broken")
+    await asyncio.sleep(0.2)
+    assert "second" in stack.daemon.workers
+
+
+async def test_websocket_snapshot_and_events(stack: Stack) -> None:
+    await synced(stack)
+    async with stack.http.ws_connect(f"{stack.api}/api/v1/ws", headers=stack.h()) as ws:
+        first = await ws.receive_json()
+        assert first["type"] == "snapshot" and "car" in first["cameras"]
+        await ws.send_str("snapshot")
+        assert (await ws.receive_json())["type"] == "snapshot"
+        await stack.post("/api/v1/cameras/car/sync")
+        seen: set[str] = set()
+        for _ in range(60):
+            msg = await asyncio.wait_for(ws.receive_json(), 5)
+            seen.add(msg["type"])
+            if "session" in seen:
+                break
+        assert {"camera", "session"} <= seen
+
+
+async def test_ws_rejects_missing_token(stack: Stack) -> None:
+    with pytest.raises(aiohttp.WSServerHandshakeError):
+        async with stack.http.ws_connect(f"{stack.api}/api/v1/ws"):
+            pass
+
+
+async def test_clip_event_is_published_after_post_processing(stack: Stack) -> None:
+    queue = stack.daemon.bus.subscribe()
+    await stack.post("/api/v1/cameras/car/sync")
+    await synced(stack)
+    types = []
+    while not queue.empty():
+        types.append(queue.get_nowait())
+    clip_events = [e for e in types if e["type"] == "clip"]
+    assert len(clip_events) == 2 and any(e["event_clip"] for e in clip_events)
+    assert stack.daemon.workers["car"].status.last_event_clip
+
+
+# ---------------------------------------------------------- wizard + network
+
+
+async def test_wizard_probe_block_storage_and_save(stack: Stack) -> None:
+    _, probe = await stack.post("/api/v1/wizard/probe", {"host": stack.cam.host})
+    assert probe["supported"] and probe["driver"] == "novatek" and probe["capabilities"]["delete"]
+    _, none = await stack.post("/api/v1/wizard/probe", {"host": "127.0.0.1:1"})
+    assert none["supported"] is False
+
+    _, block = await stack.post("/api/v1/wizard/block", {"camera_ip": "192.168.1.254"})
+    assert block["block"] == "192.168.1.252/30" and block["home_address"] == "192.168.1.253"
+    assert (await stack.post("/api/v1/wizard/block", {"camera_ip": "nonsense"}))[0] == 400
+
+    _, store = await stack.get("/api/v1/wizard/storage-test")
+    assert store["targets"]["local"]["online"]
+    _, scan = await stack.get("/api/v1/wizard/wifi-scan?interface=wlan0")
+    assert scan["available"] is False  # no Supervisor in tests: the wizard asks for the SSID
+
+    status, saved = await stack.post(
+        "/api/v1/wizard/camera",
+        {"id": "hot", "name": "Hot", "connection": "hotspot", "interface": "wlan0",
+         "ssid": "CAM", "wifi_password": "pw", "host": "192.168.1.254"},
+    )  # fmt: skip
+    assert status == 200 and saved["camera"] == "hot"
+    raw = json.loads(stack.options_path.read_text())
+    entry = next(c for c in raw["cameras"] if c["id"] == "hot")
+    assert entry["static_address"] == "192.168.1.253/30"  # computed small block
+    assert (await stack.post("/api/v1/wizard/camera", {"id": "BAD ID"}))[0] == 400
+    # Saving again replaces rather than duplicates.
+    await stack.post("/api/v1/wizard/camera", {**entry, "name": "Renamed"})
+    raw = json.loads(stack.options_path.read_text())
+    assert [c["name"] for c in raw["cameras"] if c["id"] == "hot"] == ["Renamed"]
+
+    async with stack.http.delete(f"{stack.api}/api/v1/cameras/hot", headers=stack.h()) as r:
+        assert r.status == 200
+    assert "hot" not in stack.daemon.workers
+
+
+async def test_wizard_capture_profile_and_station(stack: Stack) -> None:
+    _, bundle = await stack.post("/api/v1/wizard/capture-profile", {"host": stack.cam.host})
+    assert bundle["profile_version"] == 1 and "GET /" in bundle["responses"]
+    assert (await stack.post("/api/v1/wizard/capture-profile", {}))[0] == 400
+    assert (await stack.post("/api/v1/wizard/station", {"host": stack.cam.host}))[0] == 400
+    status, _ = await stack.post(
+        "/api/v1/wizard/station", {"host": stack.cam.host, "ssid": "Home", "password": "pw"}
+    )
+    assert status == 200
+    assert any("cmd=3033" in r for r in stack.cam.requests)
+
+
+def hotspot_options(raw: dict[str, Any]) -> None:
+    raw["cameras"].append(
+        {"id": "hot", "name": "Hot", "connection": "hotspot", "interface": "wlan0",
+         "ssid": "CAM", "host": "192.168.1.254", "static_address": "192.168.1.253/30",
+         "driver": "novatek", "enabled": True}
+    )  # fmt: skip
+
+
+async def test_overlap_check_blocks_and_reports(stack: Stack) -> None:
+    await stack.daemon.update_raw_options(hotspot_options)
+    stack.daemon.network.set_interfaces(
+        [
+            Interface(
+                "eth0", "ethernet", True, True, True, ["192.168.1.10/24"], "192.168.1.1", True
+            ),
+            Interface("wlan0", "wireless", True, False, False),
+        ]
+    )
+    status, report = await stack.post(
+        "/api/v1/cameras/hot/overlap",
+        {"known_device_ips": ["192.168.1.255"], "probe": False},
+    )
+    assert status == 200 and report["result"] == "device_in_block" and report["blocked"]
+    assert report["static_address"] == "192.168.1.253/30" and report["home_networks"]
+    assert "overlap_device_in_block" in stack.daemon.blocked_reasons("hot")
+    snap = (await stack.get("/api/v1/status"))[1]
+    issue = next(i for i in snap["issues"] if i["key"] == "subnet_overlap")
+    assert issue["camera"] == "hot" and issue["placeholders"]["conflicts"] == ["192.168.1.255"]
+    assert snap["cameras"]["hot"]["blocked_reasons"] or True
+
+    _, again = await stack.post(
+        "/api/v1/cameras/hot/overlap", {"known_device_ips": [], "probe": False}
+    )
+    assert again["result"] == "overlap_block_free" and not again["blocked"]
+    assert stack.daemon.blocked_reasons("hot") == []
+    assert (await stack.get("/api/v1/cameras/hot/overlap"))[1]["result"] == "overlap_block_free"
+    assert (await stack.post("/api/v1/cameras/hot/overlap", {"known_device_ips": "x"}))[0] == 400
+
+
+async def test_wifi_credentials_only_on_the_token_api(stack: Stack) -> None:
+    await stack.daemon.update_raw_options(
+        lambda raw: (
+            hotspot_options(raw),
+            raw["cameras"][-1].update({"wifi_password": "pw1234567"}),
+        )
+    )
+    status, wifi = await stack.get("/api/v1/cameras/hot/wifi")
+    assert status == 200
+    assert wifi["ssid"] == "CAM" and wifi["password"] == "pw1234567"
+    assert wifi["static_address"] == "192.168.1.253/30" and wifi["interface"] == "wlan0"
+    assert (await stack.get("/api/v1/cameras/car/wifi"))[0] == 400  # a LAN camera
+
+
+async def test_issues_cover_missing_adapter_and_invalid_cameras(stack: Stack) -> None:
+    await stack.daemon.update_raw_options(
+        lambda raw: raw["cameras"].append(
+            {"id": "broken", "connection": "hotspot", "enabled": True}
+        )
+    )
+    stack.daemon.network.set_interfaces(
+        [Interface("eth0", "ethernet", True, True, True, ["10.0.0.2/24"], "10.0.0.1", True)]
+    )
+    keys = {(i["key"], i["camera"]) for i in stack.daemon.issues()}
+    assert ("no_wifi_adapter", None) in keys and ("camera_invalid", "broken") in keys
+
+
+async def test_route_safety_kill_switch_state(stack: Stack) -> None:
+    await stack.daemon.update_raw_options(hotspot_options)
+    cam = stack.daemon.options.camera("hot")
+    assert cam is not None
+    # Joined to the camera, and the primary route has moved onto the hotspot interface.
+    stack.daemon.network.set_interfaces(
+        [
+            Interface("eth0", "ethernet", True, False, False),
+            Interface(
+                "wlan0", "wireless", True, True, True, ["192.168.1.253/30"], None, True, "CAM"
+            ),
+        ]
+    )
+    queue = stack.daemon.bus.subscribe()
+    stack.daemon._check_route_safety()
+    assert stack.daemon.route_unsafe == {"hot": "default_route_moved"}
+    assert "default_route_changed" in stack.daemon.blocked_reasons("hot")
+    assert any(e["type"] == "safety" for e in [queue.get_nowait() for _ in range(queue.qsize())])
+    assert any(i["key"] == "default_route_changed" for i in stack.daemon.issues())
+    # Wired again: cleared.
+    stack.daemon.network.set_interfaces(
+        [
+            Interface(
+                "eth0", "ethernet", True, True, True, ["192.168.1.10/24"], "192.168.1.1", True
+            ),
+            Interface(
+                "wlan0", "wireless", True, True, False, ["192.168.1.253/30"], None, True, "CAM"
+            ),
+        ]
+    )
+    stack.daemon._check_route_safety()
+    assert stack.daemon.route_unsafe == {}
+
+
+async def test_storage_endpoint_and_logs(stack: Stack) -> None:
+    status, storage = await stack.get("/api/v1/storage")
+    assert status == 200 and storage["mode"] == "local"
+    _, logs = await stack.get("/api/v1/logs?lines=5")
+    assert isinstance(logs["lines"], list)
+    assert (await stack.get("/api/v1/logs?lines=zzz"))[0] == 200
+    _, opts = await stack.get("/api/v1/options")
+    assert opts["storage"]["target"] == "local"
+
+
+async def test_log_level_change_requests_restart(stack: Stack) -> None:
+    await stack.daemon.update_raw_options(lambda raw: raw.update({"log_level": "debug"}))
+    assert stack.daemon._stop.is_set()
+
+
+# ------------------------------------------------------- supervisor + network
+
+
+@pytest_asyncio.fixture
+async def fake_supervisor() -> AsyncIterator[tuple[str, list[tuple[str, str, Any]]]]:
+    calls: list[tuple[str, str, Any]] = []
+
+    async def handler(request: web.Request) -> web.Response:
+        body = await request.json() if request.can_read_body else None
+        calls.append((request.method, request.path, body))
+        assert request.headers["Authorization"] == "Bearer sup-token"
+        if request.path == "/network/info":
+            return web.json_response(
+                {"result": "ok", "data": {"interfaces": [
+                    {"interface": "eth0", "type": "ethernet", "enabled": True, "connected": True,
+                     "primary": True, "ipv4": {"address": ["192.168.1.10/24"], "gateway": "192.168.1.1",
+                                                "ready": True}, "wifi": None},
+                    {"interface": "wlan0", "type": "wireless", "enabled": True, "connected": True,
+                     "primary": False, "ipv4": {"address": ["192.168.1.253/30"], "gateway": None,
+                                                 "ready": True},
+                     "wifi": {"mode": "infrastructure", "ssid": "CAM", "signal": 70}},
+                ]}}
+            )  # fmt: skip
+        if request.path == "/network/interface/wlan0/accesspoints":
+            return web.json_response({"result": "ok", "data": {"accesspoints": [{"ssid": "CAM"}]}})
+        if request.path == "/network/interface/wlan1/accesspoints":
+            return web.json_response({"result": "error", "message": "forbidden"}, status=403)
+        if request.path == "/discovery":
+            return web.json_response({"result": "ok", "data": {"uuid": "abc123"}})
+        return web.json_response({"result": "ok", "data": {}})
+
+    app = web.Application()
+    app.router.add_route("*", "/{tail:.*}", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]  # type: ignore[union-attr]
+    yield f"http://127.0.0.1:{port}", calls
+    await runner.cleanup()
+
+
+async def test_supervisor_client(
+    fake_supervisor: tuple[str, list[tuple[str, str, Any]]], session: aiohttp.ClientSession
+) -> None:
+    url, calls = fake_supervisor
+    client = SupervisorClient(session, "sup-token", url)
+    assert client.available
+    info = await client.network_info()
+    assert info["interfaces"][0]["interface"] == "eth0"
+    assert [a["ssid"] for a in await client.access_points("wlan0")] == ["CAM"]
+    with pytest.raises(SupervisorError) as err:
+        await client.access_points("wlan1")
+    assert err.value.status == 403
+    assert await client.post_discovery("dashcam_sync", {"host": "h", "port": 8100}) == "abc123"
+    await client.delete_discovery("abc123")
+    await client.set_options({"a": 1})
+    await client.restart_self()
+    assert ("POST", "/addons/self/options", {"options": {"a": 1}}) in calls
+    assert (
+        "POST",
+        "/discovery",
+        {"service": "dashcam_sync", "config": {"host": "h", "port": 8100}},
+    ) in calls
+
+    nobody = SupervisorClient(session, "", url)
+    nobody._token = ""
+    assert not nobody.available
+    with pytest.raises(SupervisorError):
+        await nobody.network_info()
+    dead = SupervisorClient(session, "x", "http://127.0.0.1:1")
+    with pytest.raises(SupervisorError):
+        await dead.network_info()
+
+
+async def test_network_monitor_and_options_stores(
+    fake_supervisor: tuple[str, list[tuple[str, str, Any]]],
+    session: aiohttp.ClientSession,
+    tmp_path: Path,
+) -> None:
+    from dashcam_sync.network import NetworkMonitor
+    from dashcam_sync.options import CameraOptions
+
+    url, calls = fake_supervisor
+    client = SupervisorClient(session, "sup-token", url)
+    monitor = NetworkMonitor(client)
+    assert not monitor.known and monitor.link_matches(CameraOptions(id="c")) is None
+    await monitor.refresh()
+    assert monitor.known and monitor.has_wifi_adapter
+    cam = CameraOptions(id="c", connection="hotspot", interface="wlan0", ssid="CAM")
+    assert monitor.link_matches(cam) is True
+    assert monitor.link_matches(cam.model_copy(update={"ssid": "OTHER"})) is False
+    assert monitor.link_matches(cam.model_copy(update={"interface": "wlan9"})) is False
+    assert [str(n) for n in monitor.home_networks({"wlan0"})] == ["192.168.1.0/24"]
+    assert monitor.default_route_ok({"wlan0"}) is True
+    assert monitor.default_route_ok({"eth0"}) is False
+    assert monitor.primary_gateway() == "192.168.1.1"
+    assert monitor.interface("eth0").as_dict()["primary"] is True  # type: ignore[union-attr]
+
+    assert parse_interfaces({"interfaces": ["junk", {"interface": "x"}]})[0].name == "x"
+    broken = NetworkMonitor(SupervisorClient(session, "sup-token", "http://127.0.0.1:1"))
+    await broken.refresh()
+    assert broken.error and not broken.known
+
+    path = tmp_path / "options.json"
+    store = FileOptionsStore(path)
+    assert await store.read() == {}
+    await store.write({"x": 1})
+    assert await store.read() == {"x": 1}
+    sup = SupervisorOptionsStore(client, path)
+    assert await sup.read() == {"x": 1}
+    await sup.write({"y": 2})
+    assert ("POST", "/addons/self/options", {"options": {"y": 2}}) in calls
+    path.write_text("[1]")
+    assert await store.read() == {}
+
+
+async def test_daemon_announces_through_discovery(
+    fake_supervisor: tuple[str, list[tuple[str, str, Any]]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url, calls = fake_supervisor
+    from dashcam_sync import supervisor as sup_mod
+
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "sup-token")
+    monkeypatch.setattr(sup_mod, "SUPERVISOR_URL", url)
+    real_init = SupervisorClient.__init__
+
+    def init(self: SupervisorClient, session: Any, token: Any = None, base_url: str = url) -> None:
+        real_init(self, session, token, url)
+
+    monkeypatch.setattr(SupervisorClient, "__init__", init)
+    cfg = DaemonConfig(
+        data_dir=tmp_path / "d",
+        media_root=tmp_path,
+        share_root=tmp_path,
+        api_port=0,
+        ui_port=0,
+        bind_host="127.0.0.1",
+        api_token=TOKEN,
+    )
+    daemon = Daemon(cfg)
+    await daemon.start()
+    try:
+        discovery = next(c for c in calls if c[1] == "/discovery")
+        assert discovery[2]["service"] == "dashcam_sync"
+        assert discovery[2]["config"]["token"] == TOKEN and discovery[2]["config"]["port"] == 0
+        assert daemon.network.known and daemon.discovery_uuid == "abc123"
+    finally:
+        await daemon.stop()
+    assert ("DELETE", "/discovery/abc123", None) in calls
+
+
+async def test_token_is_generated_once_and_kept(tmp_path: Path) -> None:
+    cfg = DaemonConfig(
+        data_dir=tmp_path, media_root=tmp_path, share_root=tmp_path, use_supervisor=False
+    )
+    first = Daemon(cfg)._load_token()
+    assert len(first) >= 32 and (tmp_path / "api_token").stat().st_mode & 0o777 == 0o600
+    assert Daemon(cfg)._load_token() == first

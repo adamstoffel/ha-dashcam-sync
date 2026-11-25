@@ -1,0 +1,27 @@
+:root { color-scheme: light dark; --bg:#fafafa; --fg:#212121; --card:#fff; --line:#dcdcdc; --accent:#03a9f4; --bad:#db4437; --ok:#0f9d58; --warn:#f4b400; }
+@media (prefers-color-scheme: dark) { :root { --bg:#111; --fg:#e1e1e1; --card:#1c1c1c; --line:#333; } }
+* { box-sizing: border-box; }
+body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+header { display:flex; flex-wrap:wrap; align-items:center; gap:16px; padding:12px 20px; border-bottom:1px solid var(--line); background:var(--card); position:sticky; top:0; z-index:2; }
+h1 { font-size:18px; margin:0; }
+nav a { margin-right:14px; text-decoration:none; color:inherit; padding:4px 0; border-bottom:2px solid transparent; }
+nav a.active { border-color:var(--accent); font-weight:600; }
+main { max-width:1000px; margin:0 auto; padding:20px; }
+h2 { margin:24px 0 8px; font-size:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:14px 16px; margin:10px 0; }
+.row { display:flex; flex-wrap:wrap; gap:12px; align-items:center; justify-content:space-between; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:12px; }
+.pill { display:inline-block; padding:1px 9px; border-radius:99px; font-size:12px; border:1px solid var(--line); }
+.pill.ok { color:var(--ok); border-color:var(--ok); } .pill.bad { color:var(--bad); border-color:var(--bad); } .pill.warn { color:var(--warn); border-color:var(--warn); }
+.muted { opacity:.7; }
+button, select, input { font:inherit; padding:6px 10px; border-radius:6px; border:1px solid var(--line); background:var(--card); color:inherit; }
+button { cursor:pointer; } button.primary { background:var(--accent); border-color:var(--accent); color:#fff; } button.danger { color:var(--bad); }
+button:disabled { opacity:.5; cursor:default; }
+label { display:block; margin:8px 0 2px; font-size:12px; opacity:.8; }
+table { width:100%; border-collapse:collapse; } th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); }
+pre { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; overflow:auto; max-height:520px; font-size:12px; }
+.bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; } .bar > div { height:100%; background:var(--accent); }
+.thumb { width:120px; height:68px; object-fit:cover; background:#000; border-radius:4px; }
+.notice { border-left:4px solid var(--warn); }
+.notice.bad { border-color:var(--bad); }
+video { max-width:100%; border-radius:6px; background:#000; }

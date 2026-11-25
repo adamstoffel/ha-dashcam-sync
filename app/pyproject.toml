@@ -1,0 +1,67 @@
+[project]
+name = "dashcam-sync"
+version = "2026.11.0"
+description = "Home Assistant app that pulls clips from Wi-Fi dashcams"
+requires-python = ">=3.13"
+license = { text = "Apache-2.0" }
+dependencies = [
+  "aiohttp>=3.11",
+  "pydantic>=2.9",
+  "defusedxml>=0.7.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.24",
+  "pytest-cov>=5",
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "types-defusedxml",
+]
+
+[project.scripts]
+dashcam-syncd = "dashcam_sync.daemon:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["dashcam_sync/src"]
+
+[tool.setuptools.package-data]
+dashcam_sync = ["ui_static/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["dashcam_sync/src", "tests"]
+addopts = "-q"
+filterwarnings = ["error::pytest.PytestUnraisableExceptionWarning"]
+
+[tool.coverage.run]
+source = ["dashcam_sync/src/dashcam_sync"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+src = ["dashcam_sync/src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "ASYNC", "SIM", "RUF", "C4", "PT"]
+ignore = ["B904", "SIM105", "RUF012", "E501", "PT018", "SIM117", "ASYNC109", "ASYNC240", "ASYNC230", "SIM102", "SIM103", "PT011", "RUF059", "B007"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+mypy_path = "dashcam_sync/src"
+packages = ["dashcam_sync"]
+plugins = ["pydantic.mypy"]
