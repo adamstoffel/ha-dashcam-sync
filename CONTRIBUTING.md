@@ -42,3 +42,8 @@ Or just use the Makefile: `make setup`, then `make check` (lint, types, tests, e
 ## Writing a driver
 
 See [docs/writing-a-driver.md](docs/writing-a-driver.md). In short: capture a device profile (panel › Cameras › Capture device profile), turn it into a fixture in `app/tests/fixtures/`, write the driver against it, and CI replays every fixture against every driver to catch false positives. New drivers ship as experimental until two users confirm them on real hardware.
+
+## Branches and releases
+
+- `main` is the default branch and is protected (see [.github/rulesets](.github/rulesets/README.md)): work happens on a branch, lands by pull request (squash or rebase) once every CI job is green, and history stays linear.
+- Releases are tags `vYYYY.M.patch` on `main` (betas `vYYYY.M.patchbN`). Release tags are immutable. The release workflow refuses a stable tag until the hardware gate for that version passes.
