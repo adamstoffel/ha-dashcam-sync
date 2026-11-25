@@ -130,8 +130,16 @@ function wizard() {
     </div>
     <label>Camera address (optional, auto-detected otherwise)</label><input id="w-host" placeholder="192.168.1.254">
     <p><button id="w-scan">Scan Wi-Fi</button> <button id="w-probe">Probe camera</button> <button id="w-save" class="primary">Save</button></p>
-    <pre id="w-out" hidden></pre></div>`;
+    <div id="w-out" class="card" hidden></div></div>`;
   const out = (v) => { const el = $("#w-out"); el.hidden = false; el.textContent = typeof v === "string" ? v : JSON.stringify(v, null, 2); };
+  const summary = (r, b) => {
+    const el = $("#w-out"); el.hidden = false;
+    const caps = Object.entries(r.capabilities || {}).filter(([, on]) => on).map(([k]) => `<span class="pill ok">${esc(k.replace("_", " "))}</span>`).join(" ");
+    el.innerHTML = `<b>Detected a ${esc(r.driver)} camera</b> at ${esc(r.host)}${r.firmware ? ` · firmware ${esc(r.firmware)}` : ""}${r.model ? ` · ${esc(r.model)}` : ""}<br>
+      <span class="muted">Can:</span> ${caps || "–"}<br>
+      <span class="muted">Reserved address block:</span> ${esc(b.block)} (Home Assistant would use ${esc(b.home_address)})
+      ${b.overlaps_home_network ? '<span class="pill warn">overlaps your home network: only these four addresses are claimed</span>' : '<span class="pill ok">no overlap with your home network</span>'}`;
+  };
   const conn = $("#w-conn");
   conn.onchange = () => { $("#w-hot").hidden = conn.value !== "hotspot"; };
   $("#w-scan").onclick = async () => {
@@ -148,7 +156,7 @@ function wizard() {
       if (!r.supported) return out("No driver recognised a camera. Join its Wi-Fi from Home Assistant first, or capture a device profile.");
       $("#w-host").value = r.host;
       const b = await api("wizard/block", { method: "POST", body: { camera_ip: r.host.split(":")[0] } });
-      out({ ...r, address_block: b.block, home_address: b.home_address, overlaps_home_network: b.overlaps_home_network });
+      summary(r, b);
     } catch (e) { out(e.message); }
   };
   $("#w-save").onclick = async () => {

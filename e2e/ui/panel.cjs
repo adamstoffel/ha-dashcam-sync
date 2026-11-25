@@ -106,7 +106,8 @@ async function waitFor(fn, what, timeout = 30000) {
     await page.selectOption("#w-conn", "lan");
     await page.fill("#w-host", "127.0.0.1:" + (await page.evaluate(async () => { const r = await (await fetch("api/v1/cameras")).json(); return r[0].options.host.split(":")[1]; })));
     await page.click("#w-probe");
-    await waitFor(async () => /novatek/.test(await page.locator("#w-out").innerText().catch(() => "")), "the wizard to detect the driver");
+    await waitFor(async () => /Detected a novatek camera/.test(await page.locator("#w-out").innerText().catch(() => "")), "the wizard to detect the driver");
+    assert.match(await page.locator("#w-out").innerText(), /Reserved address block/);
     await shot("cameras");
 
     // ---- Logs.
