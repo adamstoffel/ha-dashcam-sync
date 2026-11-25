@@ -25,7 +25,7 @@ jobs:
 
   image-scan:
     # Informational: most findings are in the Home Assistant base image's own Go binaries,
-    # which this project cannot patch. Renovate keeps the base digest current; the project's
+    # which this project cannot patch; each rebuild picks up the base image's fixes. The project's
     # own Python dependencies are gated by the pip-audit job above.
     name: Trivy report for the app image
     runs-on: ubuntu-latest

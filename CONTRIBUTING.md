@@ -46,4 +46,5 @@ See [docs/writing-a-driver.md](docs/writing-a-driver.md). In short: capture a de
 ## Branches and releases
 
 - `main` is the default branch and is protected by repository rulesets (Settings › Rules): work happens on a branch, lands by pull request (squash or rebase) once every CI job is green, and history stays linear. The required checks are listed by CI job name, so if you rename a job in `.github/workflows/ci.yml`, update the ruleset too or merges will wait for a check that never runs.
+- Dependabot (`.github/dependabot.yml`) opens weekly PRs for workflow actions, the app's runtime dependencies and the integration's test harness. To change the app's runtime dependencies by hand, edit `app/dashcam_sync/requirements.in` and, from that folder, run `pip-compile --allow-unsafe --generate-hashes --strip-extras --output-file=requirements.txt requirements.in`. The image installs only hash-checked packages.
 - Releases are tags `vYYYY.M.patch` on `main` (betas `vYYYY.M.patchbN`). Release tags are immutable. The release workflow refuses a stable tag until the hardware gate for that version passes.

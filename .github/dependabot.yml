@@ -1,0 +1,41 @@
+# Dependency updates. Weekly, Monday morning UTC; CI must pass before anything merges.
+version: 2
+updates:
+  # Workflow actions, one grouped PR a week.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+
+  # The app image's runtime dependencies. requirements.txt is a hash-locked pip-compile
+  # lock of requirements.in; Dependabot recompiles it, transitive pins and hashes included.
+  - package-ecosystem: pip
+    directory: /app/dashcam_sync
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+    groups:
+      app-runtime:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: deps
+
+  # The integration's test harness. pytest-homeassistant-custom-component pins the Home
+  # Assistant version the tests run against, so it stays in a PR of its own: CI on that PR
+  # is the check that the integration still works on the new Home Assistant.
+  - package-ecosystem: pip
+    directory: /integration
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+    commit-message:
+      prefix: test
