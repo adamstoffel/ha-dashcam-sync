@@ -23,19 +23,37 @@ from fakecam import make_bytes
 from conftest import Stack
 
 
-async def wait_for(hass: HomeAssistant, predicate, timeout: float = 15.0) -> None:  # type: ignore[no-untyped-def]
+async def wait_for(hass: HomeAssistant, predicate, timeout: float = 15.0, describe=None) -> None:  # type: ignore[no-untyped-def]
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         if predicate():
             return
         await asyncio.sleep(0.05)
         await hass.async_block_till_done()
-    raise AssertionError("timed out waiting for the stack")
+    detail = f": {describe()}" if describe else ""
+    raise AssertionError(f"timed out waiting for the stack{detail}")
+
+
+def stack_state(hass: HomeAssistant, stack: Stack) -> str:
+    """Everything needed to see where an update got stuck between the app and Home Assistant."""
+    coordinator = stack.entry.runtime_data.coordinator
+    worker = stack.daemon.workers["polestar_2"].status
+    cam = (coordinator.data or {}).get("cameras", {}).get("polestar_2", {})
+    state = hass.states.get("sensor.polestar_2_last_sync")
+    return (
+        f"app last_sync={worker.last_sync} sync_status={worker.sync_status}; "
+        f"ws_connected={coordinator.ws_connected} bus_subscribers={stack.daemon.bus.subscribers} "
+        f"last_update_success={coordinator.last_update_success}; "
+        f"coordinator last_sync={cam.get('last_sync')} sync_status={cam.get('sync_status')}; "
+        f"entity state={state.state if state else None}"
+    )
 
 
 async def synced(hass: HomeAssistant, stack: Stack) -> None:
     await wait_for(
-        hass, lambda: stack.daemon.workers["polestar_2"].status.last_sync is not None
+        hass,
+        lambda: stack.daemon.workers["polestar_2"].status.last_sync is not None,
+        describe=lambda: stack_state(hass, stack),
     )
     await stack.daemon.post.drain()  # type: ignore[union-attr]
     await wait_for(
@@ -44,6 +62,7 @@ async def synced(hass: HomeAssistant, stack: Stack) -> None:
             (s := hass.states.get("sensor.polestar_2_last_sync")) is not None
             and s.state not in ("unknown", "unavailable")
         ),
+        describe=lambda: stack_state(hass, stack),
     )
 
 
