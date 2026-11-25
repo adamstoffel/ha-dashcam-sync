@@ -1,0 +1,108 @@
+name: Dashcam Sync
+version: "2026.11.0"
+slug: dashcam_sync
+description: Pull clips from Wi-Fi dashcams into Home Assistant, with no phone app.
+url: https://github.com/adamstoffel/ha-dashcam-sync
+image: ghcr.io/adamstoffel/dashcam-sync-app-{arch}
+arch:
+  - amd64
+  - aarch64
+init: false                 # s6-overlay from the base image
+homeassistant: "2026.11.0"
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:car-connected
+panel_title: Dashcam Sync
+panel_admin: true
+hassio_api: true
+hassio_role: default        # read /network/info, post discovery, set own options
+discovery:
+  - dashcam_sync
+ports:
+  8100/tcp: null            # integration API, internal network only
+ports_description:
+  8100/tcp: Integration API (internal network only, needs the token from discovery)
+map:
+  - type: media
+    read_only: false
+  - type: share
+    read_only: false
+backup: hot
+backup_exclude:
+  - "*.log"
+  - "cache/*"
+watchdog: "http://[HOST]:[PORT:8099]/healthz"
+timeout: 60                 # time to restore() a camera on stop
+stage: experimental         # stable after 1.0 field testing
+options:
+  log_level: info
+  cameras: []
+  storage:
+    target: local              # local | network | both
+    local_folder: dashcam_sync # created under /media
+    network_folder: ""         # e.g. nas_dashcam (a Supervisor network mount)
+    spool_when_network_down: true
+    keep_original: false       # keep .ts next to the remuxed .mp4
+  retention:
+    normal_days: 14
+    event_days: 0              # 0 = keep until space is needed
+    parking_days: 30
+    photo_days: 90
+    max_total_gb: 200
+    min_free_percent: 10
+    network_normal_days: 90
+    network_event_days: 0
+    network_parking_days: 30
+    network_photo_days: 90
+    network_max_total_gb: 0    # 0 = no cap on the share
+    network_min_free_percent: 5
+    purge_time: "03:30"
+  sync:
+    mode: events_first         # events_only | events_first | everything
+    recent_minutes: 10         # always grab the last N minutes before arrival
+    delete_from_camera: false
+    delete_events_from_camera: false
+    remux_to_mp4: true
+    thumbnails: true
+schema:
+  log_level: list(debug|info|warning|error)?
+  cameras:
+    - id: match(^[a-z0-9_]{1,32}$)
+      name: str
+      connection: list(hotspot|lan)
+      interface: str?
+      ssid: str?
+      wifi_password: password?
+      ipv4: list(auto|static)?
+      static_address: match(^\d+\.\d+\.\d+\.\d+/\d+$)?
+      host: str?
+      driver: list(auto|novatek|viidure_app|http_index)
+      enabled: bool
+      sync_mode: list(events_only|events_first|everything)?
+  storage:
+    target: list(local|network|both)
+    local_folder: str
+    network_folder: str?
+    spool_when_network_down: bool
+    keep_original: bool
+  retention:
+    normal_days: int(0,)
+    event_days: int(0,)
+    parking_days: int(0,)
+    photo_days: int(0,)
+    max_total_gb: int(0,)
+    min_free_percent: int(0,90)
+    network_normal_days: int(0,)
+    network_event_days: int(0,)
+    network_parking_days: int(0,)
+    network_photo_days: int(0,)
+    network_max_total_gb: int(0,)
+    network_min_free_percent: int(0,90)
+    purge_time: match(^([01]\d|2[0-3]):[0-5]\d$)
+  sync:
+    mode: list(events_only|events_first|everything)
+    recent_minutes: int(0,)
+    delete_from_camera: bool
+    delete_events_from_camera: bool
+    remux_to_mp4: bool
+    thumbnails: bool

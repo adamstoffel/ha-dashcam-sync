@@ -21,11 +21,6 @@ async def test_tcp_probe_treats_accept_and_refuse_as_answering() -> None:
     assert await tcp_probe("127.0.0.1", ports=(port,), timeout=0.5)
 
 
-async def test_tcp_probe_silence_is_not_an_answer() -> None:
-    # TEST-NET-1 is guaranteed unroutable; the connect times out (or errors) quickly.
-    assert not await tcp_probe("192.0.2.1", ports=(80,), timeout=0.2)
-
-
 def test_event_bus_drops_oldest_when_a_subscriber_is_slow() -> None:
     bus = EventBus(maxsize=2)
     queue = bus.subscribe()

@@ -1,0 +1,5 @@
+#!/usr/bin/with-contenv bashio
+# shellcheck shell=bash
+bashio::log.info "Starting Dashcam Sync daemon"
+cd /opt/dashcam || exit 1
+exec python3 -m dashcam_sync.daemon

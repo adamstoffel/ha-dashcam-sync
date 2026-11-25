@@ -1,0 +1,135 @@
+configuration:
+  log_level:
+    name: Log level
+    description: How much the app writes to its log. Changing this restarts the app.
+  cameras:
+    name: Cameras
+    description: >-
+      One entry per dashcam. The setup wizard in the Dashcam Sync panel fills this in for you.
+    fields:
+      id:
+        name: ID
+        description: Stable key for folders, devices and entity IDs (lower-case letters, digits, underscore).
+      name:
+        name: Name
+        description: Display name, for example Polestar 2.
+      connection:
+        name: Connection
+        description: hotspot = the camera's own Wi-Fi, lan = the camera joined to your home network.
+      interface:
+        name: Wi-Fi adapter
+        description: Host Wi-Fi adapter for a hotspot camera, for example wlan0.
+      ssid:
+        name: Camera Wi-Fi name
+        description: The SSID of the camera's hotspot.
+      wifi_password:
+        name: Camera Wi-Fi password
+        description: The hotspot passphrase. It is masked here and only shared with the integration.
+      ipv4:
+        name: Addressing
+        description: >-
+          static (default) claims a small block of four addresses around the camera. auto is only safe
+          when the camera's range does not overlap your home network.
+      static_address:
+        name: Home Assistant address on the camera network
+        description: >-
+          Home Assistant's address with prefix length, for example 192.168.1.253/30. The wizard
+          computes it; the camera's block is derived from it.
+      host:
+        name: Camera address
+        description: Camera IP or hostname. Leave empty to detect it.
+      driver:
+        name: Driver
+        description: Force a driver, or leave on auto to detect the camera family.
+      enabled:
+        name: Enabled
+        description: Pause one camera without deleting it.
+      sync_mode:
+        name: Sync mode
+        description: Override the default sync mode for this camera.
+  storage:
+    name: Storage
+    description: Where clips go.
+    fields:
+      target:
+        name: Target
+        description: local = /media, network = a share added under Settings > System > Storage, both = local first then a copy.
+      local_folder:
+        name: Local folder
+        description: Folder created under /media.
+      network_folder:
+        name: Network share name
+        description: The name of the network storage you added in Home Assistant (for example nas_dashcam).
+      spool_when_network_down:
+        name: Spool while the share is down
+        description: Keep new clips locally and ship them when the share returns.
+      keep_original:
+        name: Keep original .ts files
+        description: Keep the camera's original file next to the remuxed .mp4 (useful as evidence).
+  retention:
+    name: Retention
+    description: Rolling expiration. 0 means never expire by age (or no cap). Every rule has a network_ twin for the share.
+    fields:
+      normal_days:
+        name: Normal clips (days)
+        description: Delete normal clips older than this.
+      event_days:
+        name: Event clips (days)
+        description: 0 keeps events until space is needed.
+      parking_days:
+        name: Parking clips (days)
+        description: Delete parking clips older than this.
+      photo_days:
+        name: Photos (days)
+        description: Delete photos older than this.
+      max_total_gb:
+        name: Maximum total size (GB)
+        description: Delete oldest first until under the cap.
+      min_free_percent:
+        name: Minimum free space (%)
+        description: Delete oldest first until free space recovers, and refuse to write below it.
+      network_normal_days:
+        name: Normal clips on the share (days)
+        description: Same as above, for the network target.
+      network_event_days:
+        name: Event clips on the share (days)
+        description: Same as above, for the network target.
+      network_parking_days:
+        name: Parking clips on the share (days)
+        description: Same as above, for the network target.
+      network_photo_days:
+        name: Photos on the share (days)
+        description: Same as above, for the network target.
+      network_max_total_gb:
+        name: Maximum size on the share (GB)
+        description: 0 means no cap.
+      network_min_free_percent:
+        name: Minimum free space on the share (%)
+        description: Same as above, for the network target.
+      purge_time:
+        name: Daily purge time
+        description: Local time (HH:MM) of the daily retention run.
+  sync:
+    name: Sync
+    description: What to fetch and how.
+    fields:
+      mode:
+        name: Mode
+        description: events_only = event and parking clips, events_first = those plus the most recent minutes, everything = the whole card.
+      recent_minutes:
+        name: Recent window (minutes)
+        description: Always grab normal clips from the last N minutes before arrival.
+      delete_from_camera:
+        name: Delete from camera
+        description: Delete verified clips from the SD card. Off by default.
+      delete_events_from_camera:
+        name: Also delete event clips
+        description: Event clips are only deleted from the camera when this is also on.
+      remux_to_mp4:
+        name: Convert to MP4
+        description: Lossless remux of .ts to .mp4 so clips play in browsers and the Home Assistant app.
+      thumbnails:
+        name: Thumbnails
+        description: Create a 320 px thumbnail for each clip.
+network:
+  8100/tcp: Integration API (internal network only)
