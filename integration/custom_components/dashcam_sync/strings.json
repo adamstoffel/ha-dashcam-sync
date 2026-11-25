@@ -60,7 +60,7 @@
         "title": "Dashcam Sync options",
         "menu_options": {
           "general": "Arrival hint and live view",
-          "wifi": "Connect a camera's Wi-Fi"
+          "wifi": "Re-join a camera's Wi-Fi"
         }
       },
       "general": {
@@ -75,8 +75,8 @@
         }
       },
       "wifi": {
-        "title": "Connect a camera's Wi-Fi",
-        "description": "Home Assistant joins the camera's hotspot on its Wi-Fi adapter. Pick the camera.",
+        "title": "Re-join a camera's Wi-Fi",
+        "description": "New cameras are joined from the setup wizard in the Dashcam Sync panel. Use this to write a hotspot camera's Wi-Fi profile again, for example after changing the Wi-Fi interface or if the profile was removed.",
         "data": {
           "camera": "Camera"
         }
@@ -87,7 +87,7 @@
       },
       "wifi_manual": {
         "title": "Set the Wi-Fi up by hand",
-        "description": "Home Assistant cannot change the Wi-Fi profile from here. Open [Settings > System > Network]({network_url}), choose **{interface}** and enter:\n\n- Mode: infrastructure, Wi-Fi name **{ssid}**, WPA password (shown in the Dashcam Sync app)\n- IPv4: static, address **{address}**, prefix **{prefix}**, leave gateway and DNS empty\n- IPv6: disabled\n\nPress submit when you are done."
+        "description": "Home Assistant cannot change the Wi-Fi profile from here. Open [Settings > System > Network]({network_url}), choose **{interface}** and enter:\n\n- Mode: infrastructure, Wi-Fi name **{ssid}**, WPA password: the camera Wi-Fi password entered when the camera was added\n- IPv4: static, address **{address}**, prefix **{prefix}**, leave gateway and DNS empty\n- IPv6: disabled\n\nPress submit when you are done."
       }
     },
     "error": {

@@ -62,7 +62,7 @@ Honest expectations: hotspot transfers are slow (often under 1 MB/s) and most mi
 | | |
 | --- | --- |
 | <img src="docs/images/overview.png" alt="Overview page"><br>**Overview**: every camera's state, speed and queue, plus storage health and any repair issues. | <img src="docs/images/cameras.png" alt="Cameras page with the setup wizard"><br>**Cameras**: the setup wizard probes the camera, detects its driver and computes the address block. |
-| <img src="docs/images/storage.png" alt="Storage page"><br>**Storage**: local and network targets, retention, and a dry run that lists exactly what the next purge would delete. | <img src="docs/images/logs.png" alt="Logs page"><br>**Logs**: the app's own log, so you can diagnose without leaving Home Assistant. |
+| <img src="docs/images/storage.png" alt="Storage page"><br>**Storage**: where clips are kept and moving them, retention, and a dry run that lists exactly what the next purge would delete. | <img src="docs/images/logs.png" alt="Logs page"><br>**Logs**: the app's own log, so you can diagnose without leaving Home Assistant. |
 
 ## How it fits together
 

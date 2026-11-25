@@ -53,7 +53,7 @@ BlackVue, AIT and Ambarella families are planned for 1.1 and 1.2. Unsupported ca
 
 ## Configuration
 
-Everything is stored as the app's options and can be edited in three places: this **Configuration** tab, the setup wizard in the panel, and (for things that live in Core) the integration's options flow. The daemon hot-reloads the options; only changing `log_level` restarts the app.
+Everything is stored as the app's options. Edit them in the **Dashcam Sync panel**: **Cameras** (the setup wizard and Edit) and **Settings** (sync, storage, retention). This **Configuration** tab shows the same options as YAML, for anyone who prefers it; the tables below list every key. Two things live in Home Assistant instead, under the integration's **Configure**: the arrival-hint entity and the live camera entity. The daemon hot-reloads the options; only changing `log_level` restarts the app.
 
 ### Integration token
 
@@ -100,7 +100,7 @@ Folder layout, identical on every target:
       event/   20261122_101600_front.mp4  .jpg  .json
       normal/  20261122_101500_front.mp4  20261122_101500_rear.mp4 ...
   .partial/    in-progress downloads (hidden from the media browser)
-  .spool/      files waiting for an offline network target
+  .spool/      files waiting for an offline disk or share
 ```
 
 #### Using an extra disk or SD card
@@ -109,7 +109,7 @@ A second disk in the Home Assistant machine (USB drive, SD card in a built-in re
 
 1. Format it on a computer first. exFAT or ext4 are good choices. Home Assistant does not format disks.
 2. Add it under **Settings › System › Storage › Add storage**, with **Type** *Local disk* and **Usage** *Media*. Give it a short name, for example `dashcam_disk`.
-3. In this app's Configuration tab set `storage.target` to `network` (clips go only to the disk) or `both` (a local copy as well), and `network_folder` to that name.
+3. In the panel's **Settings › Storage**, set **Keep clips on** to *A disk or share* (clips only there) or *Both* (a local copy as well), and pick the disk. In YAML: `storage.target` `network` or `both`, and `network_folder` set to its name.
 
 If the disk is unplugged, new clips wait in the local spool and move over when it is back. For an SD card, use a "high endurance" card: dashcam footage is a lot of continuous writing.
 
@@ -153,7 +153,7 @@ The network rules are the same option names prefixed with `network_`. Size-based
 
 ## Wi-Fi: how the connection works
 
-The app never edits the host network. **Home Assistant Core**, through the integration, joins the camera's hotspot on the Wi-Fi adapter (the integration's options flow, one step per camera), and the app only reads network state. You can instead set the Wi-Fi profile yourself under **Settings › System › Network**; the options flow shows the exact values.
+The app never edits the host network. **Home Assistant Core**, through the integration, joins the camera's hotspot on the Wi-Fi adapter (asked from the camera wizard's **Connect** step, or again with **Configure › Re-join a camera's Wi-Fi** on the integration), and the app only reads network state. You can instead set the Wi-Fi profile yourself under **Settings › System › Network**; the wizard shows the exact values with copy buttons.
 
 The profile uses mode infrastructure with the camera's SSID and a WPA passphrase, a static IPv4 address in a small block around the camera with **no gateway and no DNS servers**, and IPv6 disabled. Your default route and name resolution stay on Ethernet, and only those four addresses are routed to the car. NetworkManager rejoins the hotspot every time the car comes in range.
 
@@ -210,6 +210,6 @@ Each hotspot camera is bound to its own wireless interface: a second USB adapter
 | Camera never connects | Check the Wi-Fi profile under Settings › System › Network, the signal at the parking spot, and the Network check. |
 | "Subnet overlap" repair | Follow *Overlapping addresses* above. |
 | Camera stuck in playback mode | Press **Restore recording** (button on the device or in the panel). The app retries on every contact. |
-| Clips are not appearing | Check the **Logs** page, the network target status and free space on the **Storage** page. |
+| Clips are not appearing | Check the **Logs** page, the disk or share status and free space on the **Storage** page. |
 | "Unsupported camera" | Capture a device profile and attach it to a GitHub issue. |
 | Share offline | Re-add or repair the network storage under Settings › System › Storage. New clips are spooled meanwhile. |
