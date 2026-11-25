@@ -59,6 +59,8 @@ Push messages (`{"type": ..., "ts": ..., "rev": ...}`):
 | `DELETE /clips/{id}` | Delete from every target. |
 | `GET /storage` | Health of each target (mounted, writable, free space, clip bytes) and the last purge. |
 | `POST /purge` | Run retention. Body: `{"dry_run": true}` returns what would be deleted. |
+| `GET /settings` | The `sync`, `storage` and `retention` options. |
+| `PATCH /settings` | Change any of them, as `{"sync": {...}, "storage": {...}, "retention": {...}}` with only the keys to change. Each section is validated whole; errors name the field (`retention.min_free_percent: ...`). A storage location change includes the clip-move plan (`migration`). |
 | `GET /storage/location` | Current `target`, `local_folder` and `network_folder`, and the network shares and local disks Home Assistant has attached under `/media` or `/share` (`name`, `path`, `usage`, `kind`: `network` or `disk`, `fstype`). |
 | `PATCH /storage/location` | Change any of `target`, `local_folder`, `network_folder` (written to the app options). Only new clips follow; the answer includes the plan for moving the existing ones. `409` while clips are being moved. |
 | `GET /storage/migration` | `plan`: clips and bytes to move, copies to remove, destinations, and clips that are `unavailable` (files unreachable), `stranded` (on an unattached old disk) or still `processing`, plus `blocked` (why it cannot start). `job`: the running or last move. |

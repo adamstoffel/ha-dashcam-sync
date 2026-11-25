@@ -41,7 +41,7 @@ async function render() {
   view = location.hash.slice(1).split(/[/?]/)[0] || "overview";
   document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.getAttribute("href") === "#" + view));
   try {
-    await ({ overview, cameras, clips, storage, logs }[view] || overview)();
+    await ({ overview, cameras, clips, storage, settings, logs }[view] || overview)();
   } catch (e) {
     main.innerHTML = `<div class="card notice bad">${esc(e.message)}</div>`;
   }
@@ -365,14 +365,11 @@ const BLOCKED = {
   already_running: "Clips are already being moved.",
   nothing_to_move: "Every clip is already where the settings put it.",
 };
-const TARGETS = { local: "This Home Assistant", network: "The network share or disk", both: "Both" };
+const TARGETS = { local: "this Home Assistant", network: "a disk or share", both: "this Home Assistant and a disk or share" };
 
 async function storage() {
   const [s, loc] = await Promise.all([api("storage"), api("storage/location")]);
   const cur = loc.current;
-  const names = loc.attached.map((a) => a.name);
-  const netOptions = loc.attached.map((a) => `<option value="${esc(a.name)}">${esc(a.name)} (${a.kind === "disk" ? "disk" : "network"}, ${esc(a.fstype)})</option>`).join("")
-    + (cur.network_folder && !names.includes(cur.network_folder) ? `<option value="${esc(cur.network_folder)}">${esc(cur.network_folder)} (not attached)</option>` : "");
   main.innerHTML = `<h2>Storage</h2>
     <div class="card muted">Mode: <b>${esc(s.mode)}</b>${s.last_purge ? ` · last purge removed ${s.last_purge.count} copies (${bytes(s.last_purge.bytes_freed)})` : ""}</div>
     ${Object.values(s.targets).map((t) => {
@@ -381,35 +378,11 @@ async function storage() {
         <div class="muted">${esc(t.root)}</div><div class="bar" title="${used.toFixed(0)}% used"><div style="width:${used}%"></div></div>
         <div>Clips ${bytes(t.clip_bytes)} · free ${bytes(t.free_bytes)} of ${bytes(t.total_bytes)}</div></div>`;
     }).join("")}
-    <h2>Location</h2>
-    <div class="card">
-      <label for="l-target">Where new clips go</label>
-      <select id="l-target">${Object.entries(TARGETS).map(([v, t]) => `<option value="${v}" ${v === cur.target ? "selected" : ""}>${t}</option>`).join("")}</select>
-      <label for="l-local">Local folder (under /media)</label>
-      <input id="l-local" value="${esc(cur.local_folder)}">
-      <div id="l-net-row">
-        <label for="l-net">Network share or disk</label>
-        ${netOptions ? `<select id="l-net">${netOptions}</select>` : `<div class="muted" id="l-net-none">None attached. Add a network share or a local disk (USB drive, SD card) under Settings › System › Storage, with usage Media or Share.</div>`}
-      </div>
-      <p><button id="l-save" class="primary">Save location</button></p>
-      <div id="l-out" class="muted">Only new clips follow a change. Existing clips can be moved afterwards.</div>
-    </div>
+    <div class="card">Clips are kept on <b>${esc(TARGETS[cur.target])}</b>${cur.target !== "network" ? ` · local folder <code>/media/${esc(cur.local_folder)}</code>` : ""}${cur.target !== "local" ? ` · <code>${esc(cur.network_folder)}</code>` : ""}. <a href="#settings">Change in Settings</a></div>
     <div id="move"></div>
     <h2>Retention</h2>
     <p><button id="dry">Dry run</button> <button id="purge" class="danger">Purge now</button></p>
     <div id="purge-out"></div>`;
-  if (cur.network_folder && $("#l-net")) $("#l-net").value = cur.network_folder;
-  const syncNet = () => { $("#l-net-row").hidden = $("#l-target").value === "local"; };
-  $("#l-target").onchange = syncNet; syncNet();
-  $("#l-save").onclick = async () => {
-    const body = { target: $("#l-target").value, local_folder: $("#l-local").value.trim() };
-    if ($("#l-net")) body.network_folder = $("#l-net").value;
-    try {
-      await api("storage/location", { method: "PATCH", body });
-      await storage();  // the targets above follow the new settings too
-      $("#l-out").textContent = "Saved. New clips go to the new location.";
-    } catch (e) { $("#l-out").textContent = e.message; }
-  };
   const show = (r) => { $("#purge-out").innerHTML = `<div class="card">${r.dry_run ? "Would remove" : "Removed"} <b>${r.count}</b> copies, ${bytes(r.bytes_freed)}.
     ${r.skipped_targets.length ? `<div class="muted">Skipped (offline): ${esc(r.skipped_targets.join(", "))}</div>` : ""}
     <table>${(r.clips || []).slice(0, 50).map((c) => `<tr><td>${esc(c.camera)}</td><td>${esc(c.kind)}</td><td>${when(c.start)}</td><td>${esc(c.target)}</td><td class="muted">${esc(c.reason)}</td></tr>`).join("")}</table></div>`; };
@@ -456,6 +429,106 @@ function drawMove(m) {
     return;
   }
   box.innerHTML = last || notes.length ? `<div class="card" id="m-done">${[last || "Every clip is where the settings put it.", ...notes].map((n) => `<div>${n}</div>`).join("")}</div>` : "";
+}
+
+// ------------------------------------------------------------------ settings
+
+const MODES = {
+  events_only: ["Events only", "Event (incident) and parking clips. Best for slow hotspots."],
+  events_first: ["Events first", "Events and parking clips, then the last few minutes of driving."],
+  everything: ["Everything", "Every clip and photo, events first."],
+};
+
+async function settings() {
+  const [cfg, loc] = await Promise.all([api("settings"), api("storage/location")]);
+  const { sync: sy, storage: so, retention: re } = cfg;
+  const names = loc.attached.map((a) => a.name);
+  const netOptions = loc.attached.map((a) => `<option value="${esc(a.name)}" ${a.name === so.network_folder ? "selected" : ""}>${esc(a.name)} · ${a.kind} · ${esc(a.fstype)}</option>`).join("")
+    + (so.network_folder && !names.includes(so.network_folder) ? `<option value="${esc(so.network_folder)}" selected>${esc(so.network_folder)} · not attached</option>` : "");
+  const del = so && sy.delete_from_camera ? (sy.delete_events_from_camera ? "all" : "normal") : "keep";
+  const num = (id, v, unit, hint) => `<label for="${id}">${unit}</label><input id="${id}" type="number" min="0" ${id.endsWith("min_free_percent") ? 'max="90"' : ""} step="1" required value="${v}">${hint ? `<div class="muted">${hint}</div>` : ""}`;
+  const retention = (p, title) => `<div class="card" id="${p}ret"><b>${title}</b>
+    <div class="grid">
+      <div>${num(p + "max_total_gb", re[p + "max_total_gb"], "Size cap (GB)", "0 = no cap")}</div>
+      <div>${num(p + "min_free_percent", re[p + "min_free_percent"], "Minimum free space (%)", "Oldest clips go first when below")}</div>
+      <div>${num(p + "normal_days", re[p + "normal_days"], "Normal clips (days)")}</div>
+      <div>${num(p + "parking_days", re[p + "parking_days"], "Parking clips (days)")}</div>
+      <div>${num(p + "event_days", re[p + "event_days"], "Event clips (days)")}</div>
+      <div>${num(p + "photo_days", re[p + "photo_days"], "Photos (days)")}</div>
+    </div><div class="muted">0 days = no age limit (kept until space is needed). Clips marked Keep are never deleted.</div></div>`;
+  main.innerHTML = `<h2>Sync</h2>
+    <div class="card">
+      <label>What to download when the camera is in range</label>
+      ${Object.entries(MODES).map(([k, [t, d]]) => `<label class="choice"><input type="radio" name="s-mode" value="${k}" ${sy.mode === k ? "checked" : ""}> <b>${t}</b> <span class="muted">· ${d}</span></label>`).join("")}
+      <div class="grid"><div>${num("s-recent", sy.recent_minutes, "Recent driving to include (minutes)", "With Events first: the minutes before arrival")}</div>
+      <div><label for="s-del">After a verified download</label><select id="s-del">
+        <option value="keep" ${del === "keep" ? "selected" : ""}>Keep everything on the camera</option>
+        <option value="normal" ${del === "normal" ? "selected" : ""}>Delete normal clips from the camera</option>
+        <option value="all" ${del === "all" ? "selected" : ""}>Delete normal and event clips from the camera</option></select>
+        <div class="muted">Locked clips stay on the card unless they are events and events are deleted too.</div></div></div>
+      <details><summary>Advanced</summary>
+        <label class="choice"><input type="checkbox" id="s-remux" ${sy.remux_to_mp4 ? "checked" : ""}> Remux <code>.ts</code> to <code>.mp4</code> (no re-encoding)</label>
+        <label class="choice"><input type="checkbox" id="s-keep" ${so.keep_original ? "checked" : ""}> Keep the original <code>.ts</code> next to the <code>.mp4</code></label>
+        <label class="choice"><input type="checkbox" id="s-thumbs" ${sy.thumbnails ? "checked" : ""}> Make thumbnails</label>
+      </details>
+    </div>
+    <h2>Storage</h2>
+    <div class="card">
+      <label for="l-target">Keep clips on</label>
+      <select id="l-target">${Object.entries({ local: "This Home Assistant", network: "A disk or share", both: "Both" }).map(([v, t]) => `<option value="${v}" ${v === so.target ? "selected" : ""}>${t}</option>`).join("")}</select>
+      <div id="l-local-row"><label for="l-local">Local folder (under /media)</label><input id="l-local" value="${esc(so.local_folder)}"></div>
+      <div id="l-net-row">
+        <label for="l-net">Disk or share</label>
+        ${netOptions ? `<select id="l-net">${netOptions}</select>` : `<div class="muted" id="l-net-none">None attached. Add a network share or a local disk (USB drive, SD card) under <a href="/config/storage" target="_top">Settings › System › Storage</a>, with usage Media or Share.</div>`}
+        <label class="choice"><input type="checkbox" id="l-spool" ${so.spool_when_network_down ? "checked" : ""}> Keep new clips locally while it is offline, and move them over when it is back</label>
+      </div>
+      <div class="muted">A change applies to new clips. Existing clips can be moved afterwards.</div>
+    </div>
+    <div id="move"></div>
+    <h2>Retention</h2>
+    ${retention("", "This Home Assistant")}
+    ${retention("network_", "Disk or share")}
+    <div class="card"><label for="r-time">Daily purge at</label><input id="r-time" type="time" value="${esc(re.purge_time)}"></div>
+    <p><button id="save" class="primary">Save settings</button> <span id="s-out" class="muted"></span></p>`;
+  const sync = () => {
+    const t = $("#l-target").value;
+    $("#l-net-row").hidden = t === "local";
+    $("#l-local-row").hidden = t === "network";
+    $("#ret").hidden = t === "network";
+    $("#network_ret").hidden = t === "local";
+  };
+  $("#l-target").onchange = sync; sync();
+  $("#save").onclick = async () => {
+    const bad = [...main.querySelectorAll("input")].find((el) => !el.closest("[hidden]") && !el.checkValidity());
+    if (bad) {
+      const label = main.querySelector(`label[for="${bad.id}"]`)?.textContent || bad.id;
+      $("#s-out").innerHTML = `<span class="bad-text">${esc(label)}: ${esc(bad.validationMessage)}</span>`;
+      bad.focus();
+      return;
+    }
+    const n = (id) => Number($("#" + id).value);
+    const delSel = $("#s-del").value;
+    const body = {
+      sync: {
+        mode: main.querySelector("input[name=s-mode]:checked").value,
+        recent_minutes: n("s-recent"),
+        delete_from_camera: delSel !== "keep",
+        delete_events_from_camera: delSel === "all",
+        remux_to_mp4: $("#s-remux").checked,
+        thumbnails: $("#s-thumbs").checked,
+      },
+      storage: { target: $("#l-target").value, local_folder: $("#l-local").value.trim(), spool_when_network_down: $("#l-spool").checked, keep_original: $("#s-keep").checked },
+      retention: { purge_time: $("#r-time").value },
+    };
+    if ($("#l-net")) body.storage.network_folder = $("#l-net").value;
+    for (const p of ["", "network_"]) for (const k of ["max_total_gb", "min_free_percent", "normal_days", "parking_days", "event_days", "photo_days"]) body.retention[p + k] = n(p + k);
+    try {
+      const r = await api("settings", { method: "PATCH", body });
+      $("#s-out").textContent = "Saved.";
+      if (r.migration) drawMove(r.migration);
+    } catch (e) { $("#s-out").innerHTML = `<span class="bad-text">${esc(e.message)}</span>`; }
+  };
+  drawMove(await api("storage/migration"));
 }
 
 async function logs() {

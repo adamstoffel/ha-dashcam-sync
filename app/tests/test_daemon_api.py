@@ -1019,3 +1019,52 @@ async def test_wifi_interfaces_are_listed_for_the_wizard(stack: Stack) -> None:
     names = {i["name"]: i for i in r["wireless"]}
     assert set(names) == {"wlp4s0", "wlan0"}  # the wired interface is not offered
     assert names["wlan0"]["in_use_by"] == "hot" and names["wlp4s0"]["in_use_by"] is None
+
+
+# --------------------------------------------------------------------------- settings
+
+
+async def test_settings_change_only_the_keys_given(stack: Stack) -> None:
+    _, before = await stack.get("/api/v1/settings")
+    status, after = await _send(
+        stack,
+        "PATCH",
+        "/api/v1/settings",
+        {"sync": {"mode": "events_only"}, "retention": {"normal_days": 3, "purge_time": "04:15"}},
+    )
+    assert status == 200, after
+    assert after["sync"]["mode"] == "events_only" and after["retention"]["normal_days"] == 3
+    assert after["retention"]["purge_time"] == "04:15"
+    assert after["sync"]["recent_minutes"] == before["sync"]["recent_minutes"]
+    assert "migration" not in after  # the location did not change
+    raw = json.loads(stack.options_path.read_text())
+    assert raw["sync"]["mode"] == "events_only" and raw["retention"]["normal_days"] == 3
+    assert raw["cameras"][0]["id"] == "car"  # nothing else touched
+
+
+@pytest.mark.parametrize(
+    ("body", "message"),
+    [
+        ({"retention": {"min_free_percent": 95}}, "retention.min_free_percent"),
+        ({"retention": {"normal_days": -1}}, "retention.normal_days"),
+        ({"retention": {"purge_time": "25:00"}}, "retention.purge_time"),
+        ({"sync": {"mode": "sometimes"}}, "sync.mode"),
+        ({"sync": {"bogus": 1}}, "unknown sync settings"),
+        ({"cameras": []}, "cannot change ['cameras']"),
+        ({"storage": {"target": "network"}}, "storage.network_folder"),
+        ({"sync": "fast"}, "sync must be an object"),
+    ],
+)
+async def test_bad_settings_are_refused_with_the_field_named(
+    stack: Stack, body: dict, message: str
+) -> None:
+    status, err = await _send(stack, "PATCH", "/api/v1/settings", body)
+    assert status == 400 and message in err["error"], err
+
+
+async def test_a_location_change_in_settings_returns_the_move_plan(stack: Stack) -> None:
+    await synced(stack)
+    status, after = await _send(
+        stack, "PATCH", "/api/v1/settings", {"storage": {"local_folder": "elsewhere"}}
+    )
+    assert status == 200 and after["migration"]["plan"]["clips"] == 2

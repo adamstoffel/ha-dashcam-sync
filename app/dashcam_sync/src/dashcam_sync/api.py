@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 from aiohttp import web
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from . import API_VERSION, __version__
 from .catalog import TARGET_LOCAL, TARGET_NETWORK
@@ -25,7 +25,7 @@ from .detect import detect
 from .errors import ConfigError, DashcamError, UnsupportedCamera
 from .hostcheck import validate_camera_host
 from .models import Kind
-from .options import CameraOptions, StorageOptions
+from .options import CameraOptions, RetentionOptions, StorageOptions, SyncOptions
 from .profile import capture_profile
 from .storage import attached_storage
 from .supervisor import SupervisorError
@@ -490,6 +490,68 @@ async def storage_location_set(request: web.Request) -> web.Response:
     return web.json_response(d.migration_payload(plan))
 
 
+SETTINGS_SECTIONS: dict[str, type[BaseModel]] = {
+    "sync": SyncOptions,
+    "storage": StorageOptions,
+    "retention": RetentionOptions,
+}
+
+
+def _settings_payload(d: Daemon) -> dict[str, Any]:
+    opts = d.options
+    return {name: getattr(opts, name).model_dump() for name in SETTINGS_SECTIONS}
+
+
+async def settings_get(request: web.Request) -> web.Response:
+    return web.json_response(_settings_payload(_daemon(request)))
+
+
+async def settings_set(request: web.Request) -> web.Response:
+    """Change sync, storage and retention settings; each section is validated whole."""
+    d = _daemon(request)
+    body = await _json(request)
+    unknown = set(body) - set(SETTINGS_SECTIONS)
+    if unknown:
+        return _error(400, f"cannot change {sorted(unknown)} here")
+    checked: dict[str, Any] = {}
+    for name, model in SETTINGS_SECTIONS.items():
+        changes = body.get(name)
+        if changes is None:
+            continue
+        if not isinstance(changes, dict):
+            return _error(400, f"{name} must be an object")
+        current = getattr(d.options, name).model_dump()
+        stray = set(changes) - set(current)
+        if stray:
+            return _error(400, f"unknown {name} settings: {sorted(stray)}")
+        try:
+            checked[name] = (model.model_validate({**current, **changes}), set(changes))
+        except ValueError as err:
+            return _error(400, f"{name}.{_invalid(err)}")
+    storage = checked.get("storage")
+    moved = False
+    if storage is not None:
+        new, keys = storage
+        moved = any(getattr(new, k) != getattr(d.options.storage, k) for k in LOCATION_FIELDS)
+        if moved and d.migration.running:
+            return _error(409, "clips are being moved; cancel that first")
+        if new.target in ("network", "both") and not new.network_folder:
+            return _error(400, "storage.network_folder: choose a network share or disk")
+
+    def mutate(raw: dict[str, Any]) -> None:
+        for name, (model_value, keys) in checked.items():
+            section = raw.setdefault(name, {})
+            for key in keys:
+                section[key] = getattr(model_value, key)
+
+    if checked:
+        await d.update_raw_options(mutate)
+    out = _settings_payload(d)
+    if moved:
+        out["migration"] = d.migration_payload(await d.migration_plan())
+    return web.json_response(out)
+
+
 async def migration_get(request: web.Request) -> web.Response:
     d = _daemon(request)
     plan = None if d.migration.running else await d.migration_plan()
@@ -790,6 +852,8 @@ def _add_routes(app: web.Application) -> None:
     r.add_get(f"{API}/clips/{{clip}}/thumb", clip_thumb)
     r.add_post(f"{API}/purge", purge)
     r.add_get(f"{API}/storage", storage)
+    r.add_get(f"{API}/settings", settings_get)
+    r.add_patch(f"{API}/settings", settings_set)
     r.add_get(f"{API}/storage/location", storage_location_get)
     r.add_patch(f"{API}/storage/location", storage_location_set)
     r.add_get(f"{API}/storage/migration", migration_get)

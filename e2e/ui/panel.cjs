@@ -97,10 +97,32 @@ async function waitFor(fn, what, timeout = 30000) {
     assert.match(await page.locator("#purge-out").innerText(), /Would remove\s+0/);  // everything is fresh or kept
     await shot("storage");
 
+    // ---- Settings: sync and retention persist; bad values are explained.
+    await page.click("nav a[href='#settings']");
+    await page.waitForSelector("#save");
+    assert.equal(await page.locator("#l-net-row").isHidden(), true, "no disk picker while local");
+    assert.equal(await page.locator("#network_ret").isHidden(), true, "no disk retention while local");
+    await page.check("input[name=s-mode][value=events_only]");
+    await page.fill("#normal_days", "3");
+    await page.selectOption("#s-del", "normal");
+    await page.click("#save");
+    await waitFor(async () => (await page.locator("#s-out").innerText()) === "Saved.", "settings to save");
+    const saved = await page.evaluate(async () => (await fetch("api/v1/settings")).json());
+    assert.equal(saved.sync.mode, "events_only");
+    assert.equal(saved.retention.normal_days, 3);
+    assert.equal(saved.sync.delete_from_camera, true);
+    assert.equal(saved.sync.delete_events_from_camera, false);
+    await page.fill("#min_free_percent", "95");
+    await page.click("#save");
+    await waitFor(async () => /Minimum free space \(%\):/.test(await page.locator("#s-out").innerText()), "a readable validation error");
+    await page.fill("#min_free_percent", "10");
+    await page.check("input[name=s-mode][value=everything]");
+    await page.selectOption("#s-del", "keep");
+    await shot("settings");
+
     // ---- Changing the location, then moving the existing clips there.
-    assert.equal(await page.locator("#l-net-row").isHidden(), true, "no share picker while local");
     await page.fill("#l-local", "dashcam_moved");
-    await page.click("#l-save");
+    await page.click("#save");
     await page.waitForSelector("#m-start");
     assert.match(await page.locator("#move").innerText(), /clips \(.+\) are not where the settings put them/);
     await shot("storage-move");
@@ -109,10 +131,12 @@ async function waitFor(fn, what, timeout = 30000) {
     assert.match(await page.locator("#m-done").innerText(), /Last move: \d+ clips/);
     const paths = await page.evaluate(async () => (await (await fetch("api/v1/clips?limit=500")).json()).map((c) => c.path || ""));
     assert.ok(paths.length > 0 && paths.every((p) => p.includes("/dashcam_moved/")), "every clip moved: " + paths.join(", "));
-    // Clips still play from the new place.
     const firstId = await page.evaluate(async () => (await (await fetch("api/v1/clips?limit=1")).json())[0].id);
     const res = await ctx.request.get(PANEL + `api/v1/clips/${firstId}/file`);
     assert.equal(res.status(), 200);
+    await page.click("nav a[href='#storage']");
+    await page.waitForSelector(".bar");
+    assert.match(await page.locator("main").innerText(), /local folder \/media\/dashcam_moved/);
 
     // ---- Cameras + the setup wizard (local network camera, detected for real).
     await page.click("nav a[href='#cameras']");

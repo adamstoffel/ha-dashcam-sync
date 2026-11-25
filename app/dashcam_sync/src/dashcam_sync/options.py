@@ -79,17 +79,17 @@ class StorageOptions(BaseModel):
 class RetentionOptions(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    normal_days: int = 14
-    event_days: int = 0
-    parking_days: int = 30
-    photo_days: int = 90
-    max_total_gb: int = 200
+    normal_days: int = Field(default=14, ge=0)
+    event_days: int = Field(default=0, ge=0)
+    parking_days: int = Field(default=30, ge=0)
+    photo_days: int = Field(default=90, ge=0)
+    max_total_gb: int = Field(default=200, ge=0)
     min_free_percent: int = Field(default=10, ge=0, le=90)
-    network_normal_days: int = 90
-    network_event_days: int = 0
-    network_parking_days: int = 30
-    network_photo_days: int = 90
-    network_max_total_gb: int = 0
+    network_normal_days: int = Field(default=90, ge=0)
+    network_event_days: int = Field(default=0, ge=0)
+    network_parking_days: int = Field(default=30, ge=0)
+    network_photo_days: int = Field(default=90, ge=0)
+    network_max_total_gb: int = Field(default=0, ge=0)
     network_min_free_percent: int = Field(default=5, ge=0, le=90)
     purge_time: str = "03:30"
 
