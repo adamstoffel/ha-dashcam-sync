@@ -306,7 +306,11 @@ async def test_websocket_snapshot_and_events(stack: Stack) -> None:
         await ws.send_str("snapshot")
         assert (await ws.receive_json())["type"] == "snapshot"
         status_rev = (await stack.get("/api/v1/status"))[1]["rev"]
-        assert status_rev >= first["rev"]
+        assert status_rev > first["rev"]
+        # Every read is its own sample: even with no event between them, revs differ.
+        again = (await stack.get("/api/v1/status"))[1]["rev"]
+        assert again > status_rev
+        status_rev = again
         await stack.post("/api/v1/cameras/car/sync")
         seen: set[str] = set()
         camera_revs: list[int] = []

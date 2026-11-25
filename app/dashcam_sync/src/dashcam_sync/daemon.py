@@ -586,7 +586,7 @@ class Daemon:
         last = ""
         while True:
             try:
-                as_of = self.bus.seq
+                as_of = self.bus.mark()
                 payload = await asyncio.to_thread(self._hub_snapshot)
                 encoded = json.dumps(payload, sort_keys=True, default=str)
                 if encoded != last:
@@ -598,7 +598,7 @@ class Daemon:
 
     async def status_with_rev(self) -> dict[str, Any]:
         """The status plus ``rev``: every pushed event up to it is reflected in the answer."""
-        rev = self.bus.seq
+        rev = self.bus.mark()
         return {**await asyncio.to_thread(self.status_payload), "rev": rev}
 
     def _hub_snapshot(self) -> dict[str, Any]:

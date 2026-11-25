@@ -20,6 +20,15 @@ class EventBus:
         """Number of the newest event; a status read taken now reflects every event up to it."""
         return self._seq
 
+    def mark(self) -> int:
+        """Take a number for state about to be sampled outside an event.
+
+        Every sample gets its own number, so two samples of changing state (a status
+        read and a hub snapshot, say) never share one and can always be ordered.
+        """
+        self._seq += 1
+        return self._seq
+
     def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(self._maxsize)
         self._subs.add(queue)
