@@ -50,9 +50,7 @@ rules:
   dynamic-devices: done
   entity-category: done
   entity-device-class: done
-  entity-disabled-by-default:
-    status: todo
-    comment: Candidates for 1.1 are the download speed and SD card sensors.
+  entity-disabled-by-default: done
   entity-translations: done
   exception-translations: done
   icon-translations: done
@@ -64,4 +62,4 @@ rules:
     status: exempt
     comment: No third-party library; the client is built on aiohttp.
   inject-websession: done
-  strict-typing: todo
+  strict-typing: done

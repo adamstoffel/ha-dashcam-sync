@@ -6,7 +6,8 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.http.auth import async_sign_path
-from homeassistant.components.media_player import BrowseError, MediaClass, MediaType
+from homeassistant.components.media_player.const import MediaClass, MediaType
+from homeassistant.components.media_player.errors import BrowseError
 from homeassistant.components.media_source import (
     BrowseMediaSource,
     MediaSource,

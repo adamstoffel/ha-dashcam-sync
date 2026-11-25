@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.core import HomeAssistant
@@ -39,7 +40,7 @@ class LatestEventImage(DashcamSyncEntity, ImageEntity):
         ImageEntity.__init__(self, hass)
 
     @property
-    def _clip(self) -> dict | None:
+    def _clip(self) -> dict[str, Any] | None:
         return self.coordinator.latest_events.get(self.camera_id or "")
 
     @property

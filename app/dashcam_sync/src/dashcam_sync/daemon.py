@@ -80,6 +80,7 @@ class DaemonConfig:
     timing: Timing = field(default_factory=Timing)
     network_poll: float = NETWORK_POLL
     hub_push_interval: float = 30.0
+    allow_loopback_cameras: bool = False  # tests and scripts/dev.py only
     use_supervisor: bool = True
     mountinfo: str | None = None
     api_token: str | None = None
@@ -130,6 +131,7 @@ class Daemon:
         self.last_purge: dict[str, Any] | None = None
         self._tasks: list[asyncio.Task[None]] = []
         self._background: set[asyncio.Task[None]] = set()
+        self._options_lock = asyncio.Lock()
         self._runners: list[web.AppRunner] = []
         self._options_mtime = 0.0
         self._stop = asyncio.Event()
@@ -676,17 +678,18 @@ class Daemon:
     async def update_raw_options(self, mutate: Any) -> None:
         """Read-modify-write the raw options; the file watcher applies them."""
         assert self.store is not None
-        raw = json.loads(json.dumps(await self.store.read() or self.raw_options))
-        mutate(raw)
-        await self.store.write(raw)
-        # Apply immediately instead of waiting for the poll.
-        if isinstance(self.store, FileOptionsStore):
-            self._options_mtime = 0.0
-        await self._load_options()
-        self._build_storage()
-        self._sync_workers()
-        self.overlap_checked.clear()
-        self.bus.publish("options")
+        async with self._options_lock:  # concurrent edits must not overwrite each other
+            raw = json.loads(json.dumps(await self.store.read() or self.raw_options))
+            mutate(raw)
+            await self.store.write(raw)
+            # Apply immediately instead of waiting for the poll.
+            if isinstance(self.store, FileOptionsStore):
+                self._options_mtime = 0.0
+            await self._load_options()
+            self._build_storage()
+            self._sync_workers()
+            self.overlap_checked.clear()
+            self.bus.publish("options")
 
 
 def now_iso() -> str:

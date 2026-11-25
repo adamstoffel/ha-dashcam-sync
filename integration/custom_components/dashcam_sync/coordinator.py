@@ -138,7 +138,7 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
             cameras[message["camera"]] = message["status"]
             self.async_set_updated_data({**data, "cameras": cameras})
         elif kind == "hub":
-            hub = {
+            hub: Payload = {
                 k: message[k] for k in ("storage", "issues", "network", "overlap") if k in message
             }
             self.async_set_updated_data({**data, **hub})

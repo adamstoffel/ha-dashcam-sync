@@ -99,6 +99,7 @@ async def stack(
         network_poll=0.2,
         hub_push_interval=0.05,
         use_supervisor=False,
+        allow_loopback_cameras=True,
         api_token=TOKEN,
     )
     (tmp_path / "media").mkdir()
@@ -149,6 +150,7 @@ async def test_ui_only_accepts_the_ingress_proxy(
         ui_port=0,
         bind_host="127.0.0.1",
         use_supervisor=False,
+        allow_loopback_cameras=True,
         api_token=TOKEN,
     )  # default allow-list is the Supervisor's address only
     daemon = Daemon(cfg)
@@ -694,7 +696,7 @@ async def test_connected_websockets_do_not_delay_shutdown(
 
     cfg = DaemonConfig(
         data_dir=tmp_path / "d", media_root=tmp_path, share_root=tmp_path, api_port=0, ui_port=0,
-        bind_host="127.0.0.1", use_supervisor=False, api_token=TOKEN,
+        bind_host="127.0.0.1", use_supervisor=False, allow_loopback_cameras=True, api_token=TOKEN,
     )  # fmt: skip
     daemon = Daemon(cfg)
     await daemon.start()

@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from aiohttp import web
-from homeassistant.components.http import KEY_HASS, HomeAssistantView
+from homeassistant.helpers.http import KEY_HASS, HomeAssistantView
 
 from .api import DashcamSyncError
 from .const import DOMAIN, FILE_URL, THUMB_URL

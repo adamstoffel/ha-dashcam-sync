@@ -43,7 +43,9 @@ def supervisor() -> MagicMock:
 def hassio(supervisor: MagicMock):  # type: ignore[no-untyped-def]
     with (
         patch("custom_components.dashcam_sync.wifi.is_hassio", return_value=True),
-        patch("homeassistant.components.hassio.get_supervisor_client", return_value=supervisor),
+        patch(
+            "homeassistant.components.hassio.handler.get_supervisor_client", return_value=supervisor
+        ),
     ):
         yield supervisor
 
@@ -87,7 +89,7 @@ async def test_not_hassio_means_manual(hass: HomeAssistant) -> None:
 async def test_missing_client_helper_means_manual(hass: HomeAssistant) -> None:
     with (
         patch("custom_components.dashcam_sync.wifi.is_hassio", return_value=True),
-        patch.dict("sys.modules", {"homeassistant.components.hassio": None}),
+        patch.dict("sys.modules", {"homeassistant.components.hassio.handler": None}),
         pytest.raises(WifiUnavailable),
     ):
         await wifi.async_list_wifi_interfaces(hass)

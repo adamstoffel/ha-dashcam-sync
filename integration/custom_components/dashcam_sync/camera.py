@@ -44,7 +44,8 @@ class LiveCamera(DashcamSyncEntity, Camera):
         )
 
     async def stream_source(self) -> str | None:
-        return self.camera_status.get("live_url")  # type: ignore[no-any-return]
+        url = self.camera_status.get("live_url")
+        return str(url) if url else None
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None

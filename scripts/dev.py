@@ -90,6 +90,7 @@ async def main(demo: bool) -> None:
             timing=Timing(poll=2, hint_poll=1),
             use_supervisor=False,
             api_token="dev-token-" + "x" * 30,
+            allow_loopback_cameras=True,
         )
     )
     (DATA / "media").mkdir(exist_ok=True)

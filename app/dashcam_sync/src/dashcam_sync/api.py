@@ -23,6 +23,7 @@ from . import API_VERSION, __version__
 from .catalog import TARGET_LOCAL, TARGET_NETWORK
 from .detect import detect
 from .errors import ConfigError, DashcamError, UnsupportedCamera
+from .hostcheck import validate_camera_host
 from .models import Kind
 from .options import CameraOptions
 from .profile import capture_profile
@@ -302,6 +303,10 @@ async def hint(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "cameras": count})
 
 
+async def _camera_host(d: Daemon, host: str) -> str:
+    return await validate_camera_host(host, allow_loopback=d.config.allow_loopback_cameras)
+
+
 def _clip_filters(request: web.Request) -> dict[str, Any]:
     q = request.query
     kind = None
@@ -482,6 +487,8 @@ async def wizard_probe(request: web.Request) -> web.Response:
     forced = str(body.get("driver") or "auto")
     from .detect import candidate_hosts
 
+    if host:
+        await _camera_host(d, host)
     hosts = [host] if host else candidate_hosts(None)
     assert d.session is not None
     try:
@@ -546,6 +553,8 @@ async def wizard_save_camera(request: web.Request) -> web.Response:
         cam = CameraOptions.model_validate(body)
     except ValueError as err:
         return _error(400, str(err).splitlines()[0])
+    if cam.host:
+        await _camera_host(d, cam.host)
     entry = {k: v for k, v in cam.model_dump().items() if v is not None}
     if cam.connection == "hotspot" and not entry.get("static_address") and cam.ipv4 != "auto":
         ip = d.camera_ip(cam)
@@ -572,6 +581,7 @@ async def wizard_capture_profile(request: web.Request) -> web.Response:
     host = str(body.get("host") or "").strip()
     if not host:
         return _error(400, "host is required")
+    await _camera_host(d, host)
     assert d.session is not None
     bundle = await capture_profile(d.session, host)
     return web.json_response(bundle)
@@ -584,6 +594,7 @@ async def wizard_station(request: web.Request) -> web.Response:
     host, ssid, password = (str(body.get(k) or "") for k in ("host", "ssid", "password"))
     if not (host and ssid and password):
         return _error(400, "host, ssid and password are required")
+    await _camera_host(d, host)
     from .drivers.http import CameraHttp
     from .drivers.novatek import NovatekDriver
 

@@ -211,7 +211,7 @@ class DashcamSyncOptionsFlow(OptionsFlow):
 
     @property
     def _entry(self) -> DashcamSyncConfigEntry:
-        return self.config_entry  # type: ignore[return-value]
+        return self.config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_show_menu(step_id="init", menu_options=["general", "wifi"])

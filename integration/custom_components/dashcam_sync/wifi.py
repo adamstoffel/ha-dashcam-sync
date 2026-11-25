@@ -70,7 +70,7 @@ def _client(hass: HomeAssistant) -> Any:
     if not is_hassio(hass):
         raise WifiUnavailable("Home Assistant is not running with a Supervisor")
     try:
-        from homeassistant.components.hassio import get_supervisor_client
+        from homeassistant.components.hassio.handler import get_supervisor_client
     except ImportError as err:  # the helper moved in a Core update
         raise WifiUnavailable("Supervisor client not available") from err
     return get_supervisor_client(hass)

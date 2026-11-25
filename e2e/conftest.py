@@ -67,7 +67,7 @@ async def daemon(tmp_path: Path, camera: FakeCamera) -> AsyncIterator[Daemon]:
             data_dir=data, media_root=tmp_path / "media", share_root=tmp_path / "share",
             api_port=0, ui_port=0, bind_host="127.0.0.1", ingress_allow=("127.0.0.1",),
             timing=Timing(poll=0.05, hint_poll=0.02, backoff=(0.05,), restore_timeout=3),
-            network_poll=0.5, hub_push_interval=0.2, use_supervisor=False, api_token=TOKEN,
+            network_poll=0.5, hub_push_interval=0.2, use_supervisor=False, allow_loopback_cameras=True, api_token=TOKEN,
         )
     )  # fmt: skip
     await d.start()

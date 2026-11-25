@@ -56,6 +56,9 @@ jobs:
         run: |
           ruff check .
           ruff format --check .
+      - name: Types (mypy --strict)
+        working-directory: integration
+        run: pip install mypy && mypy
       - name: Tests
         working-directory: integration
         run: pytest --cov

@@ -70,7 +70,12 @@ async def test_entity_states(hass: HomeAssistant, loaded: MockConfigEntry) -> No
     )
     assert hass.states.get("sensor.polestar_2_last_sync").state == "2026-11-22T10:20:00+00:00"
     assert hass.states.get("sensor.polestar_2_last_event_clip").state == "2026-11-22T10:16:00+00:00"
-    assert float(hass.states.get("sensor.polestar_2_sd_card_free").state) == pytest.approx(8.0)
+    # Diagnostics that are rarely useful are disabled by default.
+    registry = er.async_get(hass)
+    for key in ("download_speed", "sd_card_free"):
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"polestar_2_{key}")
+        assert registry.async_get(entity_id).disabled_by is er.RegistryEntryDisabler.INTEGRATION
+        assert hass.states.get(entity_id) is None
     assert hass.states.get("switch.polestar_2_auto_sync").state == STATE_ON
     assert hass.states.get("select.polestar_2_sync_mode").state == "events_first"
     assert float(hass.states.get("sensor.dashcam_sync_local_storage_used").state) == pytest.approx(

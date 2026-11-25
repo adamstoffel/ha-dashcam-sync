@@ -75,6 +75,7 @@ CAMERA_SENSORS: tuple[CameraSensorDescription, ...] = (
         suggested_unit_of_measurement=UnitOfDataRate.KILOBYTES_PER_SECOND,
         suggested_display_precision=0,
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
         value_fn=lambda s: s.get("speed_bps"),
     ),
     CameraSensorDescription(
@@ -97,6 +98,7 @@ CAMERA_SENSORS: tuple[CameraSensorDescription, ...] = (
         suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
         suggested_display_precision=1,
         entity_category=EntityCategory.DIAGNOSTIC,
+        entity_registry_enabled_default=False,
         value_fn=lambda s: s.get("sd_free_bytes"),
     ),
 )
@@ -104,6 +106,13 @@ CAMERA_SENSORS: tuple[CameraSensorDescription, ...] = (
 
 def _target(hub: dict[str, Any], name: str) -> dict[str, Any]:
     return hub.get("storage", {}).get("targets", {}).get(name, {})  # type: ignore[no-any-return]
+
+
+def _storage_value(target: str, field: str) -> Callable[[dict[str, Any]], Any]:
+    def value(hub: dict[str, Any]) -> Any:
+        return _target(hub, target).get(field)
+
+    return value
 
 
 def _storage(key: str, target: str, field: str, network_only: bool = False) -> HubSensorDescription:
@@ -115,7 +124,7 @@ def _storage(key: str, target: str, field: str, network_only: bool = False) -> H
         native_unit_of_measurement=UnitOfInformation.BYTES,
         suggested_unit_of_measurement=UnitOfInformation.GIGABYTES,
         suggested_display_precision=1,
-        value_fn=lambda hub, t=target, f=field: _target(hub, t).get(f),
+        value_fn=_storage_value(target, field),
         network_only=network_only,
     )
 
