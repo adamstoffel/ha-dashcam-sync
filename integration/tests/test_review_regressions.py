@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 from unittest.mock import AsyncMock, patch
 
@@ -203,3 +204,57 @@ async def test_a_write_right_after_a_refresh_is_not_delayed_by_the_debounce_cool
         "switch", "turn_off", {"entity_id": "switch.polestar_2_auto_sync"}, blocking=True
     )
     assert hass.states.get("switch.polestar_2_auto_sync").state == "off"  # immediately, no sleeping
+
+
+async def test_a_status_read_that_lands_after_a_push_does_not_undo_it(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
+) -> None:
+    """The app answers a status read, then a sync finishes and is pushed, then the answer arrives.
+
+    The older answer used to replace the pushed state, and with the socket live nothing read
+    the status again until the next change, so a finished sync showed as never having run.
+    """
+    coordinator = loaded.runtime_data.coordinator
+    old = copy.deepcopy(fake_api.status)
+    done = {**CAMERA, "sync_status": "idle", "last_sync": "2026-11-25T10:00:00+00:00"}
+    real = fake_api.async_status
+
+    async def answered_before_the_push() -> dict:
+        await real()
+        fake_api.status["cameras"]["polestar_2"] = done
+        fake_api.push({"type": "camera", "camera": "polestar_2", "status": done})
+        for _ in range(20):  # let the socket task deliver the push while this read is in flight
+            await asyncio.sleep(0)
+        assert coordinator.data["cameras"]["polestar_2"]["last_sync"] == done["last_sync"]
+        return old
+
+    with patch.object(fake_api, "async_status", answered_before_the_push):
+        await coordinator.async_force_refresh()
+    await hass.async_block_till_done()
+    assert coordinator.data["cameras"]["polestar_2"]["last_sync"] == done["last_sync"]
+    assert hass.states.get("sensor.polestar_2_last_sync").state != "unknown"
+
+
+@pytest.mark.parametrize("kind", ["snapshot", "hub"])
+async def test_a_snapshot_or_hub_push_during_a_status_read_also_wins(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi, kind: str
+) -> None:
+    coordinator = loaded.runtime_data.coordinator
+    old = copy.deepcopy(fake_api.status)
+    storage = {**old["storage"], "used_bytes": 123_456_789}
+    real = fake_api.async_status
+
+    async def answered_before_the_push() -> dict:
+        await real()
+        if kind == "snapshot":
+            fake_api.push({"type": "snapshot", **{**old, "storage": storage}})
+        else:
+            fake_api.push({"type": "hub", "storage": storage})
+        for _ in range(20):
+            await asyncio.sleep(0)
+        return old
+
+    with patch.object(fake_api, "async_status", answered_before_the_push):
+        await coordinator.async_force_refresh()
+    await hass.async_block_till_done()
+    assert coordinator.data["storage"]["used_bytes"] == 123_456_789

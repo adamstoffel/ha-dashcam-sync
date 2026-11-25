@@ -58,6 +58,8 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
         self._event_listeners: set[EventListener] = set()
         self._last_push = 0.0
         self._force_next = False
+        # Pushes that arrive while a status read is in flight; the read's answer is older.
+        self._in_flight: list[Payload] = []
         self._ws_task: asyncio.Task[None] | None = None
         self.ws_connected = False
         self.unsafe_handler: Callable[[list[str]], Any] | None = None
@@ -73,6 +75,8 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
         ):
             return self.data
         self._force_next = False
+        pushed: Payload = {}
+        self._in_flight.append(pushed)
         try:
             data = await self.api.async_status()
         except DashcamSyncAuthError as err:
@@ -81,8 +85,27 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
             raise UpdateFailed(f"cannot reach the Dashcam Sync app: {err}") from err
         except DashcamSyncError as err:
             raise UpdateFailed(str(err)) from err
+        finally:
+            self._in_flight.remove(pushed)
+        data = self._newer_of(data, pushed)
         await self._async_refresh_latest_events(data)
         return data
+
+    def _newer_of(self, answer: Payload, pushed: Payload) -> Payload:
+        """Keep what was pushed while the read was in flight: the app sent it after answering."""
+        if pushed.get("snapshot") and self.data is not None:
+            return self.data
+        if cameras := pushed.get("cameras"):
+            answer = {**answer, "cameras": {**answer.get("cameras", {}), **cameras}}
+        return {**answer, **pushed.get("hub", {})}
+
+    @callback
+    def _note_push(self, key: str, value: Any = True) -> None:
+        for pushed in self._in_flight:
+            if key == "snapshot":
+                pushed["snapshot"] = True
+            else:
+                pushed.setdefault(key, {}).update(value)
 
     async def _async_refresh_latest_events(self, data: Payload) -> None:
         """Remember the newest event clip per camera (for the image entity)."""
@@ -145,6 +168,7 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
             if not _valid_hub(snapshot, require_cameras=True):
                 _LOGGER.warning("Ignoring a snapshot with an unexpected shape")
                 return
+            self._note_push("snapshot")
             self.async_set_updated_data(snapshot)
             self.hass.async_create_task(self._async_refresh_latest_events(snapshot))
             return
@@ -155,6 +179,7 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
                 return
             cameras = dict(data.get("cameras", {}))
             cameras[message["camera"]] = message["status"]
+            self._note_push("cameras", {message["camera"]: message["status"]})
             self.async_set_updated_data({**data, "cameras": cameras})
         elif kind == "hub":
             hub: Payload = {
@@ -163,6 +188,7 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
             if not _valid_hub(hub):
                 _LOGGER.warning("Ignoring a hub update with an unexpected shape")
                 return
+            self._note_push("hub", hub)
             self.async_set_updated_data({**data, **hub})
         elif kind == "clip":
             clip = message.get("clip")
