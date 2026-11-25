@@ -97,6 +97,7 @@ async def stack(
         ingress_allow=("127.0.0.1",),
         timing=Timing(poll=0.05, hint_poll=0.02, backoff=(0.05,), restore_timeout=3),
         network_poll=0.2,
+        hub_push_interval=0.05,
         use_supervisor=False,
         api_token=TOKEN,
     )
@@ -658,3 +659,59 @@ async def test_token_is_generated_once_and_kept(tmp_path: Path) -> None:
     first = Daemon(cfg)._load_token()
     assert len(first) >= 32 and (tmp_path / "api_token").stat().st_mode & 0o777 == 0o600
     assert Daemon(cfg)._load_token() == first
+
+
+async def test_hub_state_is_pushed_when_it_changes(stack: Stack) -> None:
+    queue = stack.daemon.bus.subscribe()
+    await wait_for(
+        lambda: not queue.empty() and any(e["type"] == "hub" for e in list(queue._queue))
+    )
+    first = next(e for e in list(queue._queue) if e["type"] == "hub")
+    assert {"storage", "issues", "network", "overlap"} <= set(first)
+    while not queue.empty():
+        queue.get_nowait()
+    # An issue appears and is pushed.
+    stack.daemon.workers["car"].status.unsupported = True
+    await wait_for(lambda: any(e["type"] == "hub" for e in list(queue._queue)))
+    hub = next(e for e in list(queue._queue) if e["type"] == "hub")
+    assert any(i["key"] == "unsupported_camera" for i in hub["issues"])
+
+
+async def test_config_changes_reach_subscribers_immediately(stack: Stack) -> None:
+    await synced(stack)
+    queue = stack.daemon.bus.subscribe()
+    await stack.daemon.update_raw_options(
+        lambda raw: raw["cameras"][0].update({"sync_mode": "events_only"})
+    )
+    events = [queue.get_nowait() for _ in range(queue.qsize())]
+    assert any(e["type"] == "camera" and e["status"]["sync_mode"] == "events_only" for e in events)
+
+
+async def test_connected_websockets_do_not_delay_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    cfg = DaemonConfig(
+        data_dir=tmp_path / "d", media_root=tmp_path, share_root=tmp_path, api_port=0, ui_port=0,
+        bind_host="127.0.0.1", use_supervisor=False, api_token=TOKEN,
+    )  # fmt: skip
+    daemon = Daemon(cfg)
+    await daemon.start()
+    async with aiohttp.ClientSession() as http:
+        ws = await http.ws_connect(
+            f"http://127.0.0.1:{daemon.bound_port(0)}/api/v1/ws",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        await ws.receive_json()
+        started = time.monotonic()
+        await daemon.stop()
+        assert time.monotonic() - started < 3  # used to wait for the socket to time out
+        closing = await ws.receive()
+        while closing.type == aiohttp.WSMsgType.TEXT:  # pushes queued before the close
+            closing = await ws.receive()
+        assert closing.type in (
+            aiohttp.WSMsgType.CLOSE,
+            aiohttp.WSMsgType.CLOSING,
+            aiohttp.WSMsgType.CLOSED,
+        )

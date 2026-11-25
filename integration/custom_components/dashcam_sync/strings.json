@@ -87,7 +87,7 @@
       },
       "wifi_manual": {
         "title": "Set the Wi-Fi up by hand",
-        "description": "Home Assistant cannot change the Wi-Fi profile from here. Open [Settings > System > Network](https://my.home-assistant.io/redirect/network/), choose **{interface}** and enter:\n\n- Mode: infrastructure, Wi-Fi name **{ssid}**, WPA password (shown in the Dashcam Sync app)\n- IPv4: static, address **{address}**, prefix **{prefix}**, leave gateway and DNS empty\n- IPv6: disabled\n\nPress submit when you are done."
+        "description": "Home Assistant cannot change the Wi-Fi profile from here. Open [Settings > System > Network]({network_url}), choose **{interface}** and enter:\n\n- Mode: infrastructure, Wi-Fi name **{ssid}**, WPA password (shown in the Dashcam Sync app)\n- IPv4: static, address **{address}**, prefix **{prefix}**, leave gateway and DNS empty\n- IPv6: disabled\n\nPress submit when you are done."
       }
     },
     "error": {
@@ -263,7 +263,7 @@
       "message": "Target at least one Dashcam Sync camera entity or device."
     },
     "invalid_media_content_id": {
-      "message": "{value} is not a Dashcam Sync clip. Expected media-source://dashcam_sync/clip/<id>."
+      "message": "{value} is not a Dashcam Sync clip. Expected a media content ID that ends in /clip/ followed by the clip number."
     }
   },
   "issues": {
@@ -281,15 +281,14 @@
         "step": {
           "confirm": {
             "title": "Re-check the address block",
-            "description": "The block {block} for {camera} overlaps something on your network ({conflicts}). Fix it as described in the app's documentation, then press submit to check again."
+            "description": "While connected, Home Assistant would send traffic for {block} to the car. The check found a conflict: {result} ({conflicts}). The camera stays paused until the check passes.\n\nThe block {block} for {camera} overlaps something on your network ({conflicts}). Fix it as described in the app's documentation, then press submit to check again."
           }
         },
         "error": {
           "still_blocked": "The block is still in conflict.",
           "app_unavailable": "The Dashcam Sync app did not answer."
         }
-      },
-      "description": "While connected, Home Assistant would send traffic for {block} to the car. The check found a conflict: {result} ({conflicts}). The camera stays paused until the check passes."
+      }
     },
     "default_route_changed": {
       "title": "Wi-Fi disconnected: default route moved",
@@ -297,15 +296,14 @@
         "step": {
           "confirm": {
             "title": "Disconnect the Wi-Fi",
-            "description": "After joining {camera}'s Wi-Fi the default route is no longer on the wired interface. Submit to disconnect the Wi-Fi profile now."
+            "description": "The default route moved away from the wired interface while connected to {camera}. The integration disconnects the Wi-Fi profile; if this issue stays, remove the profile under Settings > System > Network.\n\nAfter joining {camera}'s Wi-Fi the default route is no longer on the wired interface. Submit to disconnect the Wi-Fi profile now."
           }
         },
         "error": {
           "wifi_unavailable": "Home Assistant could not change the Wi-Fi. Remove the profile under Settings > System > Network.",
           "app_unavailable": "The Dashcam Sync app did not answer."
         }
-      },
-      "description": "The default route moved away from the wired interface while connected to {camera}. The integration disconnects the Wi-Fi profile; if this issue stays, remove the profile under Settings > System > Network."
+      }
     },
     "camera_playback_mode": {
       "title": "{camera} may be stuck in playback mode",
@@ -313,14 +311,13 @@
         "step": {
           "confirm": {
             "title": "Restore recording",
-            "description": "Submit to tell {camera} to go back to recording."
+            "description": "The camera was left in playback mode and is not recording. Restore recording as soon as it is in range; the app also retries on every contact.\n\nSubmit to tell {camera} to go back to recording."
           }
         },
         "error": {
           "app_unavailable": "The Dashcam Sync app did not answer or the camera is out of range."
         }
-      },
-      "description": "The camera was left in playback mode and is not recording. Restore recording as soon as it is in range; the app also retries on every contact."
+      }
     },
     "unsupported_camera": {
       "title": "{camera} is not supported",
@@ -340,14 +337,13 @@
         "step": {
           "confirm": {
             "title": "Run retention now",
-            "description": "{target} has {free_percent}% free. Submit to run the retention rules now."
+            "description": "{target} is at {free_percent}% free, below the configured minimum. Clips are not written until space recovers.\n\n{target} has {free_percent}% free. Submit to run the retention rules now."
           }
         },
         "error": {
           "app_unavailable": "The Dashcam Sync app did not answer."
         }
-      },
-      "description": "{target} is at {free_percent}% free, below the configured minimum. Clips are not written until space recovers."
+      }
     },
     "api_mismatch": {
       "title": "App and integration versions do not match",

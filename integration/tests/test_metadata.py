@@ -125,3 +125,28 @@ def test_quality_scale_marks_every_rule() -> None:
         assert status in ("done", "exempt", "todo"), name
         if status == "exempt":
             assert rule["comment"], name  # exempt needs a reason
+
+
+def _strings(node: object, path: str = ""):  # type: ignore[no-untyped-def]
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield from _strings(value, f"{path}.{key}")
+    elif isinstance(node, str):
+        yield path, node
+
+
+def test_strings_follow_hassfest_rules() -> None:
+    """The rules hassfest enforced on the first CI run, checked locally."""
+    for path, text in _strings(STRINGS):
+        assert "http://" not in text and "https://" not in text, f"URL in {path}: use a placeholder"
+        assert not re.search(r"<[^>]+>", text), f"HTML-like text in {path}"
+    for key, issue in STRINGS["issues"].items():
+        assert not ("description" in issue and "fix_flow" in issue), (
+            f"{key}: description beside fix_flow"
+        )
+
+
+def test_service_targets_use_only_supported_filters() -> None:
+    services = yaml.safe_load((INTEGRATION / "services.yaml").read_text())
+    for name, spec in services.items():
+        assert "device" not in (spec or {}).get("target", {}), name

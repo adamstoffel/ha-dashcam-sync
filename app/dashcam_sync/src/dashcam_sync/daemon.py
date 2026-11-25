@@ -79,6 +79,7 @@ class DaemonConfig:
     ingress_allow: tuple[str, ...] = ("172.30.32.2",)
     timing: Timing = field(default_factory=Timing)
     network_poll: float = NETWORK_POLL
+    hub_push_interval: float = 30.0
     use_supervisor: bool = True
     mountinfo: str | None = None
     api_token: str | None = None
@@ -189,13 +190,14 @@ class Daemon:
             self._overlap_loop(),
             self._retention_loop(),
             self._ship_loop(),
+            self._hub_loop(),
         ):
             self._tasks.append(asyncio.create_task(coro))
         await self._announce()
         _LOGGER.info("Dashcam Sync %s started with %d camera(s)", __version__, len(self.workers))
 
     async def _serve(self, app: web.Application, port: int) -> None:
-        runner = web.AppRunner(app, access_log=None)
+        runner = web.AppRunner(app, access_log=None, shutdown_timeout=5.0)
         await runner.setup()
         site = web.TCPSite(runner, self.config.bind_host, port)
         await site.start()
@@ -540,6 +542,28 @@ class Daemon:
             except Exception:
                 _LOGGER.exception("Scheduled purge failed")
             await asyncio.sleep(61)
+
+    async def _hub_loop(self) -> None:
+        """Push hub-level state (storage, issues, network, overlap) when it changes.
+
+        Camera statuses are pushed as they change; everything else would go stale
+        for a subscriber that never polls, so it is pushed here.
+        """
+        last = ""
+        while True:
+            try:
+                payload = await asyncio.to_thread(self._hub_snapshot)
+                encoded = json.dumps(payload, sort_keys=True, default=str)
+                if encoded != last:
+                    last = encoded
+                    self.bus.publish("hub", **payload)
+            except Exception:
+                _LOGGER.exception("Building the hub snapshot failed")
+            await asyncio.sleep(self.config.hub_push_interval)
+
+    def _hub_snapshot(self) -> dict[str, Any]:
+        full = self.status_payload()
+        return {k: full[k] for k in ("storage", "issues", "network", "overlap")}
 
     async def _ship_loop(self) -> None:
         while True:

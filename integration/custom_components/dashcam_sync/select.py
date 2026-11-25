@@ -50,4 +50,4 @@ class SyncModeSelect(DashcamSyncEntity, SelectEntity):
                 translation_key="action_failed",
                 translation_placeholders={"error": str(err)},
             ) from err
-        await self.coordinator.async_request_refresh()
+        await self.coordinator.async_force_refresh()

@@ -235,6 +235,7 @@ class CameraWorker:
         self.camera = camera
         self.status.name = camera.display_name
         self.status.enabled = camera.enabled
+        self._publish_status()  # sync_mode / enabled changes reach subscribers now
         self._wake.set()
 
     def request_sync(self) -> None:

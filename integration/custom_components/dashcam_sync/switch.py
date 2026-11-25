@@ -49,7 +49,7 @@ class AutoSyncSwitch(DashcamSyncEntity, SwitchEntity):
                 translation_key="action_failed",
                 translation_placeholders={"error": str(err)},
             ) from err
-        await self.coordinator.async_request_refresh()
+        await self.coordinator.async_force_refresh()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._set(True)

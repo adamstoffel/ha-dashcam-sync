@@ -35,6 +35,7 @@ _LOGGER = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "ui_static"
 DAEMON = web.AppKey("daemon", object)
 SECRETS = web.AppKey("expose_secrets", bool)
+SOCKETS: web.AppKey[Any] = web.AppKey("sockets", object)
 API = "/api/v1"
 
 
@@ -131,6 +132,7 @@ async def websocket(request: web.Request) -> web.StreamResponse:
     d = _daemon(request)
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
+    request.app[SOCKETS].add(ws)
     queue = d.bus.subscribe()
     await ws.send_json({"type": "snapshot", **d.status_payload()})
 
@@ -151,6 +153,7 @@ async def websocket(request: web.Request) -> web.StreamResponse:
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
         d.bus.unsubscribe(queue)
+        request.app[SOCKETS].discard(ws)
     return ws
 
 
@@ -596,7 +599,15 @@ async def wizard_station(request: web.Request) -> web.Response:
 # --------------------------------------------------------------------- apps
 
 
+async def _close_sockets(app: web.Application) -> None:
+    """Close push sockets on shutdown so a connected integration cannot delay the stop."""
+    for ws in list(app[SOCKETS]):
+        await ws.close(code=aiohttp.WSCloseCode.GOING_AWAY, message=b"shutting down")
+
+
 def _add_routes(app: web.Application) -> None:
+    app[SOCKETS] = set()
+    app.on_shutdown.append(_close_sockets)
     r = app.router
     r.add_get("/healthz", healthz)
     r.add_get(f"{API}/info", info)

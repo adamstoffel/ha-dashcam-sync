@@ -137,6 +137,11 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
             cameras = dict(data.get("cameras", {}))
             cameras[message["camera"]] = message["status"]
             self.async_set_updated_data({**data, "cameras": cameras})
+        elif kind == "hub":
+            hub = {
+                k: message[k] for k in ("storage", "issues", "network", "overlap") if k in message
+            }
+            self.async_set_updated_data({**data, **hub})
         elif kind == "clip":
             clip = message.get("clip")
             if message.get("event_clip") and clip:
@@ -159,6 +164,11 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
             "clip_deleted",
         ):
             self.hass.async_create_task(self.async_request_refresh())
+
+    async def async_force_refresh(self) -> None:
+        """Read fresh state even while the socket is live (after our own writes)."""
+        self._last_push = 0.0
+        await self.async_request_refresh()
 
     # ----------------------------------------------------------------- events
 

@@ -281,3 +281,34 @@ async def test_unavailable_when_the_app_is_unreachable(
     assert not coordinator.last_update_success
     assert hass.states.get("binary_sensor.polestar_2_connected").state == STATE_UNAVAILABLE
     _ = timedelta
+
+
+async def test_hub_push_updates_storage_and_issues(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
+) -> None:
+    storage = copy.deepcopy(fake_api.status["storage"])
+    storage["targets"]["local"]["clip_bytes"] = 7_000_000_000
+    fake_api.push({"type": "hub", "storage": storage,
+                   "issues": [{"key": "unsupported_camera", "camera": "polestar_2", "placeholders": {}}]})  # fmt: skip
+    await hass.async_block_till_done()
+    assert float(hass.states.get("sensor.dashcam_sync_local_storage_used").state) == pytest.approx(
+        7.0
+    )
+    from homeassistant.helpers import issue_registry as ir
+
+    assert ir.async_get(hass).async_get_issue("dashcam_sync", "unsupported_camera_polestar_2")
+
+
+async def test_writes_force_a_fresh_read_even_with_a_live_socket(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
+) -> None:
+    fake_api.push({"type": "camera", "camera": "polestar_2", "status": CAMERA})  # socket is live
+    await hass.async_block_till_done()
+    before = len(fake_api.calls_named("status"))
+    fake_api.status["cameras"]["polestar_2"] = {**CAMERA, "enabled": False}
+    await hass.services.async_call(
+        "switch", "turn_off", {ATTR_ENTITY_ID: "switch.polestar_2_auto_sync"}, blocking=True
+    )
+    await hass.async_block_till_done()
+    assert len(fake_api.calls_named("status")) > before
+    assert hass.states.get("switch.polestar_2_auto_sync").state == "off"

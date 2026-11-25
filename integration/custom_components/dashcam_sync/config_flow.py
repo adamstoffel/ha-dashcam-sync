@@ -44,6 +44,8 @@ from .wifi import (
 
 _LOGGER = logging.getLogger(__name__)
 
+NETWORK_SETTINGS_URL = "https://my.home-assistant.io/redirect/network/"
+
 STEP_USER_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HOST): str,
@@ -303,4 +305,7 @@ class DashcamSyncOptionsFlow(OptionsFlow):
         """Guided manual setup: the exact values to type under Settings, System, Network."""
         if user_input is not None:
             return self.async_create_entry(data=dict(self.config_entry.options))
-        return self.async_show_form(step_id="wifi_manual", description_placeholders=self._profile)
+        return self.async_show_form(
+            step_id="wifi_manual",
+            description_placeholders={**self._profile, "network_url": NETWORK_SETTINGS_URL},
+        )

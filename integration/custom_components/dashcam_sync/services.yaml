@@ -2,8 +2,6 @@ sync:
   target:
     entity:
       integration: dashcam_sync
-    device:
-      integration: dashcam_sync
 keep_clip:
   fields:
     media_content_id:
