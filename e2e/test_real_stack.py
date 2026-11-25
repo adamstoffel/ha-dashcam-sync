@@ -206,7 +206,13 @@ async def test_sync_now_when_out_of_range_is_a_clean_error(
     from homeassistant.exceptions import HomeAssistantError
 
     await synced(hass, stack)
-    await stack.camera.stop()
+
+    # The car drives away: the camera stops answering. Simulated at the link check, not by
+    # shutting the fake camera's server down, whose shutdown time varies between machines.
+    async def out_of_range(_camera: object) -> bool:
+        return False
+
+    stack.daemon.workers["polestar_2"].ctx.link_up = out_of_range  # type: ignore[assignment]
     await wait_for(
         hass,
         lambda: hass.states.get("binary_sensor.polestar_2_connected").state == "off",
