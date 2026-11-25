@@ -14,7 +14,7 @@ First version. See `app/dashcam_sync/CHANGELOG.md` for the app side.
   - the address-block check returned a misleading result for LAN cameras;
   - a non-list `cameras` option crashed option parsing;
   - a malformed WebSocket frame could drop the integration's socket;
-  - a status read answered just before a push could land after it and undo it, so a finished sync could show as never having run until the next change (pushes received during a read now win);
+  - a status read answered just before a push could land after it and undo it, so a finished sync could show as never having run until the next change (pushes and status reads now carry a `rev` order number, and a pushed state replaces a status answer only if it is newer);
   - four hassfest errors (services target filter, HTML-like and URL text in translations, `fix_flow` beside `description`).
 - Found by an independent code review, each fixed with a regression test that fails without the fix:
   - fresh clips from a camera with a reset clock were purged straight after download (age is now counted from download time at the earliest);

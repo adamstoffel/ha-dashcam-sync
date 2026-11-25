@@ -258,3 +258,30 @@ async def test_a_snapshot_or_hub_push_during_a_status_read_also_wins(
         await coordinator.async_force_refresh()
     await hass.async_block_till_done()
     assert coordinator.data["storage"]["used_bytes"] == 123_456_789
+
+
+@pytest.mark.parametrize(("push_rev", "wins"), [(9, False), (10, False), (11, True)])
+async def test_only_pushes_numbered_after_the_status_answer_override_it(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi, push_rev: int, wins: bool
+) -> None:
+    """A push received during a read can still be older than the answer (it was queued first).
+
+    The app stamps the answer with the newest push it reflects; only later pushes win.
+    """
+    coordinator = loaded.runtime_data.coordinator
+    answer = {**copy.deepcopy(fake_api.status), "rev": 10}
+    answer["storage"] = {**answer["storage"], "used_bytes": 1}
+    pushed_storage = {**answer["storage"], "used_bytes": 2}
+    real = fake_api.async_status
+
+    async def read_with_a_push_in_flight() -> dict:
+        await real()
+        fake_api.push({"type": "hub", "rev": push_rev, "storage": pushed_storage})
+        for _ in range(20):
+            await asyncio.sleep(0)
+        return answer
+
+    with patch.object(fake_api, "async_status", read_with_a_push_in_flight):
+        await coordinator.async_force_refresh()
+    await hass.async_block_till_done()
+    assert coordinator.data["storage"]["used_bytes"] == (2 if wins else 1)

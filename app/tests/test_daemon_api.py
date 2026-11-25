@@ -302,16 +302,24 @@ async def test_websocket_snapshot_and_events(stack: Stack) -> None:
     async with stack.http.ws_connect(f"{stack.api}/api/v1/ws", headers=stack.h()) as ws:
         first = await ws.receive_json()
         assert first["type"] == "snapshot" and "car" in first["cameras"]
+        assert isinstance(first["rev"], int)
         await ws.send_str("snapshot")
         assert (await ws.receive_json())["type"] == "snapshot"
+        status_rev = (await stack.get("/api/v1/status"))[1]["rev"]
+        assert status_rev >= first["rev"]
         await stack.post("/api/v1/cameras/car/sync")
         seen: set[str] = set()
+        camera_revs: list[int] = []
         for _ in range(60):
             msg = await asyncio.wait_for(ws.receive_json(), 5)
             seen.add(msg["type"])
+            if msg["type"] == "camera":
+                camera_revs.append(msg["rev"])
             if "session" in seen:
                 break
         assert {"camera", "session"} <= seen
+        assert camera_revs == sorted(camera_revs)  # one order for every push
+        assert max(camera_revs) > status_rev  # the sync's pushes come after the read
 
 
 async def test_ws_rejects_missing_token(stack: Stack) -> None:
