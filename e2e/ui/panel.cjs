@@ -23,7 +23,7 @@ const SCREENS = screensIdx > 0 ? path.resolve(process.argv[screensIdx + 1]) : nu
 const PANEL = "http://127.0.0.1:8099/";
 
 function startDaemon() {
-  const child = spawn(PY, [path.join(ROOT, "scripts", "dev.py"), "--demo", "--fresh"], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(PY, [path.join(ROOT, "scripts", "dev.py"), "--demo", "--fresh"], { cwd: ROOT, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, PYTHONUNBUFFERED: "1" } });
   let log = "";
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("daemon did not start:\n" + log)), 60000);

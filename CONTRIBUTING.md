@@ -29,10 +29,14 @@ ffmpeg is needed for the post-processing tests (they skip without it).
 
 Try the app without a car: `python scripts/fake_camera.py` starts a fake camera and `scripts/dev.sh` runs the daemon against it.
 
+Or just use the Makefile: `make setup`, then `make check` (lint, types, tests, e2e, docs), `make ui` for the browser tests and `make help` for the rest. `pip install pre-commit && pre-commit install` runs ruff, actionlint and shellcheck on every commit.
+
 ## Quality bars
 
 - App: `ruff`, `mypy --strict`, 90 % line coverage. Integration: `ruff`, 95 % coverage.
 - Every reported bug gets a fixture or a test **before** its fix merges.
+- Documentation is tested: relative links, screenshots, every API route (`docs/api.md`) and every app option (`DOCS.md`) must be documented, or CI fails.
+- Strings in the integration follow hassfest rules (no URLs or HTML in translations; use placeholders).
 - Update `CHANGELOG.md` in the same PR. User-facing text says "app", not "add-on".
 
 ## Writing a driver

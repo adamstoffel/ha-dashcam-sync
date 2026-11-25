@@ -139,3 +139,35 @@ def test_docs_carry_the_overlap_guide() -> None:
 def test_repository_yaml(name: str) -> None:
     data = yaml.safe_load((APP.parent / name).read_text())
     assert data["name"] and data["url"].startswith("https://") and data["maintainer"]
+
+
+def test_every_option_is_documented_in_docs_md() -> None:
+    docs = (APP / "DOCS.md").read_text()
+    names: set[str] = set()
+    for section in ("storage", "retention", "sync"):
+        names.update(CONFIG["options"][section])
+    from dashcam_sync.options import CameraOptions
+
+    names.update(CameraOptions.model_fields)
+    names.discard("name")  # documented as "name", too generic to grep
+    missing = sorted(
+        n for n in names if f"`{n}`" not in docs and n.replace("network_", "") not in docs
+    )
+    assert missing == []
+
+
+def test_every_api_route_is_documented() -> None:
+    from aiohttp import web
+
+    from dashcam_sync import api
+
+    app = web.Application()
+    api._add_routes(app)
+    docs = (APP.parent.parent / "docs" / "api.md").read_text()
+    normalised = re.sub(r"\{[^}]+\}", "{}", docs)
+    missing = []
+    for resource in app.router.resources():
+        path = resource.canonical.removeprefix("/api/v1")
+        if re.sub(r"\{[^}]+\}", "{}", path) not in normalised:
+            missing.append(path)
+    assert missing == []

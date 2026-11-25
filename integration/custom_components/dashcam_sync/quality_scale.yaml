@@ -40,10 +40,10 @@ rules:
   diagnostics: done
   discovery-update-info: done
   discovery: done
-  docs-data-update: todo
+  docs-data-update: done
   docs-examples: done
   docs-known-limitations: done
-  docs-supported-devices: todo
+  docs-supported-devices: done
   docs-supported-functions: done
   docs-troubleshooting: done
   docs-use-cases: done

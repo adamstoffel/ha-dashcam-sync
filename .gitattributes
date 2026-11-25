@@ -1,0 +1,7 @@
+* text=auto eol=lf
+*.png binary
+*.sh text eol=lf
+app/dashcam_sync/rootfs/etc/s6-overlay/s6-rc.d/**/run text eol=lf
+app/dashcam_sync/rootfs/etc/s6-overlay/s6-rc.d/**/finish text eol=lf
+app/tests/fixtures/*.json linguist-generated
+docs/images/*.png linguist-generated

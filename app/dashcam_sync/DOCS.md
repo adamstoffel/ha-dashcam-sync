@@ -163,6 +163,7 @@ Each hotspot camera is bound to its own wireless interface: a second USB adapter
 - No host network, no extra capabilities, the default Supervisor API role, ingress for the UI and a custom AppArmor profile: security rating 8.
 - The panel is served only to the Supervisor's ingress proxy; the integration API needs a token that is only handed to Core through discovery.
 - Every camera response is treated as hostile: bodies are capped at 4 MB, XML is parsed with defusedxml, every request has a timeout, and camera-supplied paths are never used as local file names.
+- The setup wizard only probes private or link-local addresses: public addresses, loopback and Home Assistant's own network are refused.
 - ffmpeg runs with only the `file` protocol, a 120 s timeout and CPU and memory limits.
 
 ## Troubleshooting

@@ -1,0 +1,5 @@
+title: Dashcam Sync for Home Assistant
+description: Pull the clips off a Wi-Fi dashcam into Home Assistant, with no phone app.
+theme: jekyll-theme-minimal
+exclude:
+  - hardware-gate

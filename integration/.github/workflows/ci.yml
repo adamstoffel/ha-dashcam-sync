@@ -15,7 +15,7 @@ jobs:
         with: { python-version: "3.13", cache: pip }
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0
       - run: pip install -r requirements_test.txt PyTurboJPEG av numpy
-      - run: ruff check . && ruff format --check . && pytest --cov
+      - run: ruff check . && ruff format --check . && pip install mypy && mypy && pytest --cov
   validate:
     runs-on: ubuntu-latest
     steps:

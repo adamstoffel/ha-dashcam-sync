@@ -4,6 +4,18 @@ Companion integration for the **Dashcam Sync** app. The app pulls clips off a Wi
 
 Requires Home Assistant 2026.11 or newer with the Supervisor, and the Dashcam Sync app (add its repository under **Settings › Apps › App store › Repositories**).
 
+## Supported devices
+
+The integration does not talk to cameras itself; it talks to the Dashcam Sync app, which supports these camera families (see the [supported camera list](https://github.com/adamstoffel/ha-dashcam-sync/blob/main/docs/supported-cameras.md) for quirks):
+
+| Driver | Typical cameras |
+| --- | --- |
+| `novatek` | Novatek NT96xxx clones (FitcamX-style), default address 192.168.1.254 |
+| `viidure_app` | Cameras using the Viidure `/app` API, default address 192.168.169.1 |
+| `http_index` | Any camera that serves an HTML directory listing of video files |
+
+BlackVue, AIT and Ambarella families are planned. If your camera is unsupported, the app can capture a redacted device profile that a contributor can turn into a driver.
+
 ## Set up
 
 The app announces itself through Supervisor discovery: confirm **Dashcam Sync discovered** under **Settings › Devices & services**. If discovery is unavailable, add the integration manually with the app's internal host name (for example `local-dashcam-sync`), port `8100` and the API token.
@@ -50,6 +62,10 @@ automation:
         data:
           media_content_id: "{{ trigger.to_state.attributes.media_content_id }}"
 ```
+
+## Data updates
+
+The integration is `local_push`. The app pushes every change over a WebSocket (`/api/v1/ws`): camera statuses as they change, new clips and sync results as they happen, and hub-level state (storage, issues) whenever it differs. If the socket drops, the integration reconnects with backoff and falls back to polling `/api/v1/status` every 30 seconds, and entities go unavailable if the app cannot be reached at all. After the integration changes something itself (the switch, the select, a button) it reads fresh state immediately.
 
 ## Media browser
 

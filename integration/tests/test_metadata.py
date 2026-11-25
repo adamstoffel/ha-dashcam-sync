@@ -123,7 +123,7 @@ def test_quality_scale_marks_every_rule() -> None:
     for name, rule in rules.items():
         status = rule if isinstance(rule, str) else rule["status"]
         assert status in ("done", "exempt", "todo"), name
-        assert status != "todo" or name in ("docs-data-update", "docs-supported-devices"), name
+        assert status != "todo", f"{name} is still todo"
         if status == "exempt":
             assert rule["comment"], name  # exempt needs a reason
 

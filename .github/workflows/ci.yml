@@ -123,7 +123,10 @@ jobs:
         run: docker run --rm --entrypoint python3 dashcam-sync-app:ci -c "import dashcam_sync, shutil; print(dashcam_sync.__version__, shutil.which('ffmpeg'))"
 
   catalog-checks:
-    name: hassfest and HACS
+    # The HACS action validates the layout of the remote repository itself, so it only
+    # makes sense in the split dashcam-sync-integration repository (see
+    # integration/.github/workflows/ci.yml). hassfest works on a staged copy here.
+    name: hassfest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -134,9 +137,6 @@ jobs:
           cp -r integration/custom_components ./custom_components
           cp integration/hacs.json ./hacs.json
       - uses: home-assistant/actions/hassfest@master
-      - uses: hacs/action@main
-        with:
-          category: integration
 
   release-metadata:
     name: Versions agree, scripts work

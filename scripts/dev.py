@@ -99,7 +99,7 @@ async def main(demo: bool) -> None:
         loop.add_signal_handler(sig, daemon.request_stop)
     await daemon.start()
     print(f"\nFake camera:  http://{host}/\nPanel:        http://127.0.0.1:8099/\n"
-          f"API token:    {daemon.token}\nData:         {DATA}\nCtrl+C to stop.\n")  # fmt: skip
+          f"API token:    {daemon.token}\nData:         {DATA}\nCtrl+C to stop.\n", flush=True)  # fmt: skip
     await daemon.wait()
     await daemon.stop()
     await cam.stop()
