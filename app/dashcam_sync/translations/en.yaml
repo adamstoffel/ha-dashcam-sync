@@ -64,8 +64,10 @@ configuration:
         name: Local folder
         description: Folder created under /media.
       network_folder:
-        name: Network share name
-        description: The name of the network storage you added in Home Assistant (for example nas_dashcam).
+        name: Network share or disk name
+        description: >-
+          The name of the network share or local disk (USB drive, SD card) you added under
+          Settings > System > Storage, for example nas_dashcam or dashcam_disk.
       spool_when_network_down:
         name: Spool while the share is down
         description: Keep new clips locally and ship them when the share returns.

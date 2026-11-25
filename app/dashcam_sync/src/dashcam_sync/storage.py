@@ -32,6 +32,12 @@ from .options import StorageOptions
 _LOGGER = logging.getLogger(__name__)
 
 NETWORK_FSTYPES = frozenset({"cifs", "smb3", "nfs", "nfs4"})
+# Home Assistant's "Local disk" storage (Settings > System > Storage) supports these.
+# ntfs3 is the kernel NTFS driver; fuseblk is how ntfs-3g shows up.
+LOCAL_DISK_FSTYPES = frozenset(
+    {"ext2", "ext3", "ext4", "vfat", "exfat", "ntfs", "ntfs3", "fuseblk", "btrfs", "f2fs"}
+)
+STORAGE_FSTYPES = NETWORK_FSTYPES | LOCAL_DISK_FSTYPES
 PARTIAL_DIR = ".partial"
 SPOOL_DIR = ".spool"
 SIDECAR_SUFFIXES = (".jpg", ".json")
@@ -67,9 +73,16 @@ def mount_fstype(path: Path | str, mountinfo: str | None = None) -> str | None:
     return None
 
 
-def is_network_mount(path: Path | str, mountinfo: str | None = None) -> bool:
+def is_storage_mount(path: Path | str, mountinfo: str | None = None) -> bool:
+    """A network share or an added local disk is mounted at exactly ``path``.
+
+    "Exactly" is what keeps this safe for local disk file systems too: when the share or
+    disk is missing, the Supervisor leaves an empty folder on the data disk, which is not
+    a mount point of its own, so writing there (and silently filling the data disk) is
+    refused.
+    """
     fstype = mount_fstype(path, mountinfo)
-    return fstype is not None and fstype.lower() in NETWORK_FSTYPES
+    return fstype is not None and fstype.lower() in STORAGE_FSTYPES
 
 
 @dataclass(slots=True)
@@ -132,7 +145,7 @@ class Target:
     def mount_ok(self) -> bool:
         if not self.needs_mount:
             return True
-        return is_network_mount(self.root, self._mountinfo)
+        return is_storage_mount(self.root, self._mountinfo)
 
     def check(self, catalog: Catalog | None = None) -> TargetHealth:
         """Mount check, write+delete probe, and free space."""
@@ -294,13 +307,13 @@ class StorageManager:
         """``/media/<name>`` for Media shares, ``/share/<name>`` for Share ones."""
         candidates = [self.media_root / folder, self.share_root / folder]
         for candidate in candidates:
-            if is_network_mount(candidate, self._mountinfo):
+            if is_storage_mount(candidate, self._mountinfo):
                 return candidate
         return candidates[0]
 
     def network_mount_ok(self, folder: str) -> bool:
         return any(
-            is_network_mount(root / folder, self._mountinfo)
+            is_storage_mount(root / folder, self._mountinfo)
             for root in (self.media_root, self.share_root)
         )
 

@@ -11,7 +11,7 @@ Start with the diagnostics download (**Settings › Devices & services › Dashc
 | Repair: **Wi-Fi disconnected: default route moved** | After joining, the default route left the wired interface. The integration already dropped the profile. Make sure the Wi-Fi profile has no gateway and no DNS (use the options flow, not a hand-made profile). |
 | Repair: **camera may be stuck in playback mode** | A session was interrupted before the camera was restored. Press the fix, the **Restore recording** button, or just wait: the app retries on every contact. |
 | Sync is very slow | Hotspot Wi-Fi is slow (often under 1 MB/s). Improve range, and rely on event clips. The *Download speed* sensor is disabled by default; enable it to watch the rate. |
-| Clips are not appearing | Check the **Storage** page: a network share that is not mounted is refused (the Supervisor leaves an empty folder when a share is offline). New clips are spooled locally and shipped when it returns. |
+| Clips are not appearing | Check the **Storage** page: a network share or added disk that is not mounted is refused (the Supervisor leaves an empty folder when one is offline). New clips are spooled locally and shipped when it returns. |
 | Repair: **unsupported camera** | No driver recognised it. [Capture a device profile](device-profile.md) and open an issue. |
 | The panel says the camera is "away" but it is parked next to the house | The app checks reachability on the camera's ports; confirm the Wi-Fi profile is connected and that nothing blocks the camera's address. |
 | Changing `log_level` restarts the app | Intended: it is the only option that does. Everything else is hot-reloaded. |

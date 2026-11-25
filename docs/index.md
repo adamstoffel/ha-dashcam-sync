@@ -31,4 +31,4 @@ A hotspot camera needs a Wi-Fi adapter that Home Assistant OS has a driver for. 
 
 ### Storage
 
-Clips go under `/media/dashcam_sync` by default. To use a NAS add the share under **Settings › System › Storage › Add network storage**, then set the app's `storage.target` to `network` or `both` and `network_folder` to the share's name. Retention defaults: 14 days of normal clips locally (90 on the share), 30 days of parking clips, events kept until space is needed, 200 GB cap locally, 10 % minimum free space.
+Clips go under `/media/dashcam_sync` by default. To use a NAS, a USB drive or an SD card, add it under **Settings › System › Storage › Add storage** (a network share, or *Local disk* with usage *Media*), then set the app's `storage.target` to `network` or `both` and `network_folder` to its name. Retention defaults: 14 days of normal clips locally (90 on the share), 30 days of parking clips, events kept until space is needed, 200 GB cap locally, 10 % minimum free space.

@@ -71,13 +71,13 @@ A rule failure (for example a hotspot camera without an `ssid`, or two hotspot c
 
 | Option | Meaning |
 | --- | --- |
-| `target` | `local` (/media), `network` (a share) or `both` (local first, then a copy to the share). |
+| `target` | `local` (/media), `network` (a network share or an added disk) or `both` (local first, then a copy there). |
 | `local_folder` | Folder created under /media (default `dashcam_sync`). |
-| `network_folder` | Name of a network storage you added under **Settings › System › Storage › Add network storage**. A share with usage *Media* appears under `/media/<name>`, one with usage *Share* under `/share/<name>`. |
+| `network_folder` | Name of the storage you added under **Settings › System › Storage › Add storage**: a network share, or a **Local disk** such as a USB drive or SD card. Storage with usage *Media* appears under `/media/<name>`, with usage *Share* under `/share/<name>`. |
 | `spool_when_network_down` | Keep new clips locally (`.spool`) and ship them when the share returns. |
 | `keep_original` | Keep the camera's `.ts` next to the remuxed `.mp4`. |
 
-The app never mounts shares itself. Before every write it requires a live `cifs` or `nfs` mount at exactly that path, because the Supervisor can leave an empty folder behind when a share is offline and writing there silently fills the local disk. It then writes and deletes a probe file and refuses to write if free space would drop below `min_free_percent`. A network target that stays offline for an hour raises a repair issue.
+The app never mounts anything itself. Before every write it requires a live mount at exactly that path: a network share (`cifs`, `nfs`) or a local disk Home Assistant supports (ext2/3/4, FAT, exFAT, NTFS, Btrfs, F2FS). When a share or disk is missing, the Supervisor can leave an empty folder behind, and writing there would silently fill the system disk. It then writes and deletes a probe file and refuses to write if free space would drop below `min_free_percent`. A network target that stays offline for an hour raises a repair issue.
 
 Clips are never part of the app's backup (only the small catalogue in `/data` is). Back clips up through the NAS.
 
@@ -92,6 +92,16 @@ Folder layout, identical on every target:
   .partial/    in-progress downloads (hidden from the media browser)
   .spool/      files waiting for an offline network target
 ```
+
+#### Using an extra disk or SD card
+
+A second disk in the Home Assistant machine (USB drive, SD card in a built-in reader, internal drive) can hold the clips:
+
+1. Format it on a computer first. exFAT or ext4 are good choices. Home Assistant does not format disks.
+2. Add it under **Settings › System › Storage › Add storage**, with **Type** *Local disk* and **Usage** *Media*. Give it a short name, for example `dashcam_disk`.
+3. In this app's Configuration tab set `storage.target` to `network` (clips go only to the disk) or `both` (a local copy as well), and `network_folder` to that name.
+
+If the disk is unplugged, new clips wait in the local spool and move over when it is back. For an SD card, use a "high endurance" card: dashcam footage is a lot of continuous writing.
 
 ### Retention
 
