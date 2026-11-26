@@ -416,6 +416,11 @@ class Catalog:
             ).fetchall()
         return [_clip(r) for r in rows]
 
+    def unfinished_not_listed(self, camera: str, recs: list[Recording]) -> list[ClipRow]:
+        """Unfinished clips whose source path is absent from a full camera listing."""
+        listed = {r.path for r in recs}
+        return [c for c in self.unfinished(camera) if c.src_path not in listed]
+
     # ----------------------------------------------------------------- copies
 
     def add_copy(
