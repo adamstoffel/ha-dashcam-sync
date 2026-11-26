@@ -433,8 +433,12 @@ async function wizard(existing) {
     const caps = Object.entries(r.capabilities || {}).filter(([, on]) => on).map(([k]) => `<span class="badge ok">${esc(k.replace(/_/g, " "))}</span>`).join(" ");
     return `<div class="card" style="margin:12px 0 0"><b>Detected a ${esc(r.driver)} camera</b> at ${esc(r.host)}${r.firmware ? ` · firmware ${esc(r.firmware)}` : ""}${r.model ? ` · ${esc(r.model)}` : ""}
       <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">${caps}</div>
-      ${b ? `<div class="muted small" style="margin-top:8px">Reserved address block ${esc(b.block)} · Home Assistant uses ${esc(b.static_address)}
-        ${b.overlaps_home_network ? '<span class="badge warn">overlaps your home network: only these 4 addresses are claimed, or 2 if one is taken</span>' : '<span class="badge ok">no overlap with your home network</span>'}</div>` : ""}</div>`;
+      ${b ? `<div class="muted small" style="margin-top:8px">${b.mode === "point_to_point"
+        ? `Point-to-point · Home Assistant uses ${esc(b.static_address)}, only ${esc((b.claimed || []).join(" and "))} are routed to the car`
+        : `Reserved address block ${esc(b.block)} · Home Assistant uses ${esc(b.static_address)}`}
+        ${b.blocked ? '<span class="badge bad">conflict: run Network check</span>'
+          : b.overlaps_home_network || b.result === "overlap_block_free" ? `<span class="badge info">inside your home network's range; the claimed addresses are free</span>`
+          : '<span class="badge ok">no overlap with your home network</span>'}</div>` : ""}</div>`;
   };
   const apList = () => {
     if (!st.aps) return "";
@@ -563,7 +567,9 @@ async function wizard(existing) {
         const r = await api("wizard/probe", { method: "POST", body: { host } });
         if (!r.supported) return null;
         let b = null;
-        if (st.connection === "hotspot") b = await api("wizard/block", { method: "POST", body: { camera_ip: r.host.split(":")[0] } }).catch(() => null);
+        // The camera is saved by now: show the address actually in use, not a preview.
+        if (st.connection === "hotspot") b = await api(`cameras/${st.id}/overlap`).catch(() => null)
+          || await api("wizard/block", { method: "POST", body: { camera_ip: r.host.split(":")[0] } }).catch(() => null);
         return summary(r, b);
       } catch (e) { return null; }
     };
