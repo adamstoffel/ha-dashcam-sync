@@ -366,3 +366,99 @@ def test_progress_uses_the_estimate_then_the_real_size(
     worker._learn_size(2, stream)  # type: ignore[arg-type]  # unknown clip: no change
     assert worker._remaining_base == 60_215_648
     env.catalog.close()
+
+
+# -------------------------------------------- review findings on sizeless listings
+
+
+async def _sgk_env(tmp_path: Path, session: aiohttp.ClientSession) -> tuple[Env, FakeCamera]:
+    cam = FakeCamera("viidure")
+    cam.sgk = True
+    await cam.start()
+    cam.add_viidure("loop", "20261126113926.ts", 300_000, 1_795_000_000)
+    cam.add_viidure("loop", "20261126114016.ts", 90_000, 1_795_000_050)  # being recorded
+    return make_env(tmp_path, session, cam), cam
+
+
+async def _close(env: Env, cam: FakeCamera) -> None:
+    await env.post.stop()
+    env.catalog.close()
+    await cam.stop()
+
+
+async def test_a_crash_after_placing_a_sizeless_clip_adopts_it(
+    tmp_path: Path, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No listing size: the verified size saved before placing lets the file be adopted."""
+    env, cam = await _sgk_env(tmp_path, session)
+    try:
+        real = env.catalog.complete_clip
+
+        def crash_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+            monkeypatch.setattr(env.catalog, "complete_clip", real)
+            raise OSError("power cut")
+
+        monkeypatch.setattr(env.catalog, "complete_clip", crash_once)
+        await env.session()
+        assert recorded(env) == 0
+        cam.range_requests.clear()
+        downloads = len([r for r in cam.requests if r.endswith(".ts")])
+        await env.session()
+        assert recorded(env) == 1
+        assert len([r for r in cam.requests if r.endswith(".ts")]) == downloads  # adopted
+        assert not [p for p in final_files(env) if "_2." in p.name]
+    finally:
+        await _close(env, cam)
+
+
+async def test_a_complete_part_is_finished_when_the_camera_answers_416(
+    tmp_path: Path, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every byte was saved, then placing failed: the resume gets 416 and must finish."""
+    env, cam = await _sgk_env(tmp_path, session)
+    try:
+        storage = env.storage
+        real_place = storage.place
+
+        def fail_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+            monkeypatch.setattr(storage, "place", real_place)
+            raise OSError("disk hiccup")
+
+        monkeypatch.setattr(storage, "place", fail_once)
+        await env.session()
+        [part] = [c for c in env.catalog.unfinished("car") if c.offset]
+        assert part.offset == 300_000  # the whole clip is in the part file
+        await env.session()
+        [clip] = env.catalog.list_clips(camera="car")
+        assert clip.size == 300_000
+        copy = env.catalog.copy(clip.id, TARGET_LOCAL)
+        assert copy is not None
+        assert Path(copy.path).read_bytes() == cam.files[0].data
+    finally:
+        await _close(env, cam)
+
+
+def test_a_reused_path_without_a_time_in_its_name_is_a_new_recording() -> None:
+    import datetime as dt
+
+    from dashcam_sync.models import Kind, Recording
+
+    cat = Catalog(":memory:")
+    first = Recording("/record/clip.mp4", 0, dt.datetime(2026, 1, 1, tzinfo=dt.UTC), Kind.NORMAL)
+    row, _ = cat.upsert_recording("car", first)
+    cat.complete_clip(row.id, sha256="0" * 64, target="local", path="/m/a.mp4", size=10)
+    later = Recording("/record/clip.mp4", 0, dt.datetime(2026, 1, 2, tzinfo=dt.UTC), Kind.NORMAL)
+    assert cat.is_known_done("car", first)
+    assert not cat.is_known_done("car", later)
+    cat.close()
+
+
+def test_a_same_size_file_with_other_bytes_is_not_reused(tmp_path: Path) -> None:
+    from dashcam_sync.storage import reuse_or_unique
+
+    src, dst = tmp_path / "src.mp4", tmp_path / "dst.mp4"
+    src.write_bytes(b"a" * 100)
+    dst.write_bytes(b"b" * 100)
+    assert reuse_or_unique(dst, src) != dst  # another clip: never overwritten
+    dst.write_bytes(b"a" * 100)
+    assert reuse_or_unique(dst, src) == dst  # a finished copy of this clip: reused

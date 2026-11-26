@@ -9,6 +9,7 @@ silently fills local disk), every write is preceded by a mount health check.
 from __future__ import annotations
 
 import datetime as dt
+import filecmp
 import logging
 import os
 import shutil
@@ -294,11 +295,16 @@ def _relative_or_name(path: Path, root: Path, camera_id: str) -> Path:
 def reuse_or_unique(dst: Path, src: Path) -> Path:
     """``dst``, or a free name next to it, unless ``dst`` is a finished copy of ``src``.
 
-    A copy that was fully written before a crash, but never recorded, has the same size as
-    its source: reusing it avoids a ``_2`` duplicate on the next run.
+    A copy that was fully written before a crash, but never recorded, is byte for byte the
+    source: reusing it avoids a ``_2`` duplicate on the next run. Same size alone is not
+    enough (two clips can share a name and a size), so the bytes are compared.
     """
     try:
-        if dst.is_file() and dst.stat().st_size == src.stat().st_size:
+        if (
+            dst.is_file()
+            and dst.stat().st_size == src.stat().st_size
+            and filecmp.cmp(dst, src, shallow=False)
+        ):
             return dst
     except OSError:
         pass

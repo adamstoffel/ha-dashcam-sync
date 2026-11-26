@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .drivers.base import timestamp_from_name
 from .models import Channel, Kind, Recording, utc
 
 SCHEMA = """
@@ -200,14 +201,21 @@ class Catalog:
     def _identity(camera: str, rec: Recording) -> tuple[str, tuple[object, ...]]:
         """How a listed recording is matched to its row.
 
-        Path, size and start time. When the listing gives no trustworthy size (0),
-        the path alone (these cameras put the time in every file name), preferring a
-        finished row: a corrected size or start time must not make a clip look new.
+        Path, size and start time. When the listing gives no trustworthy size (0) and
+        the file name carries the recording time (it then names one recording only),
+        the path alone, preferring a finished row: a corrected start time must not make
+        a clip look new. A sizeless path without a time in its name (a camera that
+        reuses ``clip.mp4``) keeps the start time, so a new recording is new.
         """
         if rec.size:
             return (
                 "camera=? AND src_path=? AND size=? AND start_ts=?",
                 (camera, rec.path, rec.size, rec.start.timestamp()),
+            )
+        if timestamp_from_name(rec.path) is None:
+            return (
+                "camera=? AND src_path=? AND start_ts=? ORDER BY id DESC LIMIT 1",
+                (camera, rec.path, rec.start.timestamp()),
             )
         return (
             "camera=? AND src_path=? ORDER BY status IN ('done', 'deleted') DESC, id DESC LIMIT 1",
@@ -249,6 +257,11 @@ class Catalog:
         with self._lock:
             row = self._conn.execute(f"SELECT status FROM clips WHERE {where}", args).fetchone()
         return row is not None and row["status"] in ("done", "deleted")
+
+    def set_verified_size(self, clip_id: int, size: int) -> None:
+        """The size the download proved, saved before the file is placed."""
+        with self._lock:
+            self._conn.execute("UPDATE clips SET size=? WHERE id=?", (size, clip_id))
 
     def refresh_listing(self, camera: str, rec: Recording) -> None:
         """Correct an already downloaded clip's type and start time when the driver

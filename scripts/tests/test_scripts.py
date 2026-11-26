@@ -234,3 +234,30 @@ def test_install_on_ha_copies_both_parts_and_bumps_the_version(tmp_path: Path) -
     assert (config / "custom_components" / "dashcam_sync" / "manifest.json").exists()
     assert "Check for updates" in run.stdout  # no `ha` command here: the manual steps
     assert os.access(SCRIPTS / "install-on-ha.sh", os.X_OK)
+
+
+def test_ha_api_check_does_not_count_names_inside_functions_or_classes(
+    tmp_path: Path,
+) -> None:
+    ha = _fake_ha(tmp_path)
+    (ha / "homeassistant" / "helpers" / "nested.py").write_text(
+        "class Example:\n"
+        "    def removed_helper(self): ...\n"
+        "def outer():\n"
+        "    local_only = 1\n"
+        "try:\n"
+        "    from x import guarded\n"
+        "except ImportError:\n"
+        "    guarded = None\n"
+        "if True:\n"
+        "    conditional = 1\n"
+    )
+    src = _integration(
+        tmp_path,
+        "from homeassistant.helpers.nested import Example, guarded, conditional\n"
+        "from homeassistant.helpers.nested import removed_helper, local_only\n",
+    )
+    problems = ha_api.missing_imports(ha, [src])
+    assert len(problems) == 2
+    assert any("no removed_helper" in p for p in problems)
+    assert any("no local_only" in p for p in problems)

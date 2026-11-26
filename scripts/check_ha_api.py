@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,10 +48,26 @@ def _module_file(root: Path, module: str) -> Path | None:
     return None
 
 
+def _module_level(body: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """Statements that run at import time: the body, and blocks of ``if``/``try``/``with``
+    in it, but never function or class bodies (names there are not importable)."""
+    for node in body:
+        yield node
+        if isinstance(node, ast.If | ast.With | ast.AsyncWith | ast.For | ast.While):
+            yield from _module_level(
+                node.body + node.orelse if hasattr(node, "orelse") else node.body
+            )
+        elif isinstance(node, ast.Try | ast.TryStar):
+            blocks = node.body + node.orelse + node.finalbody
+            for handler in node.handlers:
+                blocks += handler.body
+            yield from _module_level(blocks)
+
+
 def _top_level_names(path: Path) -> set[str]:
     """Every name a module can be imported by: definitions, assignments and re-imports."""
     names: set[str] = set()
-    for node in ast.walk(_parse(path.read_text("utf-8"))):
+    for node in _module_level(_parse(path.read_text("utf-8")).body):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             names.add(node.name)
         elif isinstance(node, ast.Assign):

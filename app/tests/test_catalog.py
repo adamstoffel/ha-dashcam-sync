@@ -115,13 +115,13 @@ def test_a_downloaded_clip_gets_its_type_corrected_and_its_verified_size() -> No
 
     cat = Catalog(":memory:")
     start = dt.datetime(2026, 11, 25, 10, 23, 15, tzinfo=dt.UTC)
-    listed = Recording("EMMC/Photo/F/x.jpg", 0, start, Kind.EVENT, approx_size=73400)
+    listed = Recording("EMMC/Photo/F/20261125182315.jpg", 0, start, Kind.EVENT, approx_size=73400)
     row, _ = cat.upsert_recording("car", listed)
     cat.complete_clip(row.id, sha256="0" * 64, target="local", path="/m/x.jpg", size=325210)
     assert cat.get_clip(row.id).size == 325210  # the verified size, not the listed one
     assert cat.is_known_done("car", listed)
     later = start + dt.timedelta(hours=16)  # the time read from the file name
-    fixed = Recording("EMMC/Photo/F/x.jpg", 0, later, Kind.PHOTO)
+    fixed = Recording("EMMC/Photo/F/20261125182315.jpg", 0, later, Kind.PHOTO)
     assert cat.is_known_done("car", fixed)  # a corrected time does not make it new
     cat.refresh_listing("car", fixed)
     clip = cat.get_clip(row.id)

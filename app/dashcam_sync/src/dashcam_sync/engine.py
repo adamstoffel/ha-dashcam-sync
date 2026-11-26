@@ -638,7 +638,19 @@ class CameraWorker:
         offset = min(row.offset, part.stat().st_size) if part.exists() else 0
         if rec.size and offset > rec.size:
             offset = 0
-        stream = await driver.open(rec, offset)
+        try:
+            stream = await driver.open(rec, offset)
+        except NothingBeyond as err:
+            if offset <= 0:
+                raise
+            # The part already holds every byte (a crash or failed confirmation after
+            # the last one): the 416 is the camera confirming there is nothing more.
+            claims = {"listing": rec.size or None, "416 total": err.total}
+            if any(v is not None and v != offset for v in claims.values()):
+                self._discard(part, row)
+                raise ProtocolError(f"the saved part ({offset} bytes) disagrees: {claims}") from err
+            await self._place_part(driver, rec, row, dest, part, stats)
+            return
         self._learn_size(row.id, stream)
         try:
             if stream.start != offset:
@@ -713,9 +725,23 @@ class CameraWorker:
             raise Incomplete(f"stopped at {size} of {expected} bytes; resumes next time")
         if expected is None:
             await self._confirm_end(driver, rec, size)
+        await self._place_part(driver, rec, row, dest, part, stats)
 
+    async def _place_part(
+        self,
+        driver: BaseDriver,
+        rec: Recording,
+        row: ClipRow,
+        dest: Destination,
+        part: Path,
+        stats: SessionStats,
+    ) -> None:
+        """Hash, place and record a verified part file."""
         digest = await asyncio.to_thread(_sha256, part)
-        final = storage.place(self.camera.id, rec, part, dest)
+        # Saved first, so a crash after placing can still adopt the file when the
+        # listing gives no trustworthy size (see _adopt_placed).
+        self.ctx.catalog.set_verified_size(row.id, part.stat().st_size)
+        final = self.ctx.storage().place(self.camera.id, rec, part, dest)
         await self._complete(driver, rec, row, dest, final, digest, stats)
 
     async def _complete(
@@ -761,11 +787,12 @@ class CameraWorker:
 
     def _adopt_placed(self, rec: Recording, row: ClipRow, dest: Destination) -> Path | None:
         """A file a crashed run moved into place but never recorded."""
-        if not row.part_path or Path(row.part_path).exists() or not rec.size:
+        size = rec.size or row.size  # row.size: the verified size saved before placing
+        if not row.part_path or Path(row.part_path).exists() or not size:
             return None
         candidate = dest.target.root / clip_relative_path(self.camera.id, rec)
         try:
-            if candidate.stat().st_size != rec.size:
+            if candidate.stat().st_size != size:
                 return None
         except OSError:
             return None

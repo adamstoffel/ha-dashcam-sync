@@ -172,8 +172,9 @@ class CameraHttp:
             except NETWORK_ERRORS as err:
                 raise LinkLost(f"{path}: {err}") from err
             if resp.status == 416 and offset > 0:
+                stated = _unsatisfied_total(resp.headers.get("Content-Range"))
                 resp.release()
-                raise NothingBeyond(f"{path}: nothing at or after byte {offset}")
+                raise NothingBeyond(f"{path}: nothing at or after byte {offset}", stated)
             if resp.status not in (200, 206):
                 resp.release()
                 raise ProtocolError(f"{path}: HTTP {resp.status}")
@@ -224,3 +225,17 @@ async def tcp_open(host: str, port: int, timeout: float = 1.5) -> bool:
     except OSError:
         pass
     return True
+
+
+def _unsatisfied_total(value: str | None) -> int | None:
+    """The size in a 416's ``Content-Range: bytes */N``, if it states one."""
+    if not value:
+        return None
+    unit, _, rest = value.strip().partition(" ")
+    if unit.lower() != "bytes" or not rest.startswith("*/"):
+        return None
+    try:
+        total = int(rest[2:])
+    except ValueError:
+        return None
+    return total if total >= 0 else None

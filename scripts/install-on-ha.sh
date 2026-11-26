@@ -34,17 +34,44 @@ else
   wget -qO- "$REPO/archive/$REF.tar.gz" | tar xz -C "$tmp" --strip-components=1
 fi
 
-rm -rf "$apps/dashcam_sync" "$config/custom_components/dashcam_sync"
-cp -r "$tmp/app/dashcam_sync" "$apps/dashcam_sync"
+src_app="$tmp/app/dashcam_sync"
+src_int="$tmp/integration/custom_components/dashcam_sync"
+for f in "$src_app/config.yaml" "$src_int/manifest.json"; do
+  [ -f "$f" ] || { echo "The download for $REF has no ${f#"$tmp"/}; nothing was changed." >&2; exit 1; }
+done
+
+# Stage both next to their destinations (same file system, so the swap is a rename),
+# edit the staged copy, then swap. The old copies stay until both are in place.
 mkdir -p "$config/custom_components"
-cp -r "$tmp/integration/custom_components/dashcam_sync" "$config/custom_components/"
+new_app="$apps/.dashcam_sync.new" new_int="$config/custom_components/.dashcam_sync.new"
+old_app="$apps/.dashcam_sync.old" old_int="$config/custom_components/.dashcam_sync.old"
+rm -rf "$new_app" "$new_int" "$old_app" "$old_int"
+cp -r "$src_app" "$new_app"
+cp -r "$src_int" "$new_int"
 
 # Build here instead of pulling a published image, and always count as newer: a
 # pre-release suffix like -dev would sort *before* the installed version.
-cfg="$apps/dashcam_sync/config.yaml"
+cfg="$new_app/config.yaml"
 base="$(sed -n 's/^version: "\{0,1\}\([0-9]*\.[0-9]*\)\..*/\1/p' "$cfg")"
 sed -i '/^image:/d' "$cfg"
 sed -i "s/^version: .*/version: \"$base.$(date +%y%m%d%H%M)\"/" "$cfg"
+
+restore() {
+  echo "Install failed; putting the previous version back." >&2
+  [ -d "$old_app" ] && { rm -rf "$apps/dashcam_sync"; mv "$old_app" "$apps/dashcam_sync"; }
+  [ -d "$old_int" ] && { rm -rf "$config/custom_components/dashcam_sync"; mv "$old_int" "$config/custom_components/dashcam_sync"; }
+  rm -rf "$new_app" "$new_int"
+}
+trap 'restore; rm -rf "$tmp"' INT TERM
+{
+  { [ ! -d "$apps/dashcam_sync" ] || mv "$apps/dashcam_sync" "$old_app"; } &&
+  { [ ! -d "$config/custom_components/dashcam_sync" ] || mv "$config/custom_components/dashcam_sync" "$old_int"; } &&
+  mv "$new_app" "$apps/dashcam_sync" &&
+  mv "$new_int" "$config/custom_components/dashcam_sync"
+} || { restore; exit 1; }
+trap 'rm -rf "$tmp"' EXIT INT TERM
+rm -rf "$old_app" "$old_int"
+cfg="$apps/dashcam_sync/config.yaml"
 echo "Installed $(grep '^version' "$cfg") from $REF${sha:+ ($(echo "$sha" | cut -c1-7))}"
 
 if command -v ha >/dev/null 2>&1; then
