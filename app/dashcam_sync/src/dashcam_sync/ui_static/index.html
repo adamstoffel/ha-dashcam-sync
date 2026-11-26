@@ -4,9 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Dashcam Sync</title>
+<meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">
 <link rel="stylesheet" href="static/style.css">
 </head>
 <body>
+<a class="skip" href="#main" onclick="document.getElementById('main').focus(); return false;">Skip to content</a>
 <header>
   <h1>Dashcam Sync</h1>
   <nav id="nav">
@@ -18,7 +21,7 @@
     <a href="#logs">Logs</a>
   </nav>
 </header>
-<main id="main" aria-live="polite"><div class="empty"><span class="spinner"></span></div></main>
+<main id="main" tabindex="-1"><div class="empty"><span class="spinner"></span></div></main>
 <footer id="version"></footer>
 <div id="toast" role="status" aria-live="polite" hidden></div>
 <script src="static/app.js"></script>

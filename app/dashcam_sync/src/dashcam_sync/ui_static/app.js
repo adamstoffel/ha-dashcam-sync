@@ -14,13 +14,15 @@ const api = async (path, opts = {}) => {
   return data;
 };
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const NUM = [new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }), new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 })];
 const bytes = (n) => {
   if (n == null) return "–";
   const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return n.toFixed(i ? 1 : 0) + " " + u[i];
+  return NUM[i ? 1 : 0].format(n) + "\u00a0" + u[i];
 };
-const when = (iso) => (iso ? new Date(iso).toLocaleString() : "never");
+const DATE = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+const when = (iso) => (iso ? DATE.format(new Date(iso)) : "never");
 const eta = (s) => (s == null ? "–" : s < 90 ? `${Math.round(s)} s` : `${Math.round(s / 60)} min`);
 const ago = (iso) => {
   if (!iso) return "never";
@@ -127,7 +129,14 @@ function menuButton(items, label = "More actions") {
     menu.hidden = !open; btn.setAttribute("aria-expanded", String(open));
     if (open) menu.querySelector("button")?.focus();
   };
-  wrap.addEventListener("keydown", (e) => { if (e.key === "Escape") { hide(); btn.focus(); } });
+  wrap.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { hide(); btn.focus(); return; }
+    if (menu.hidden || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const items = $$("button", menu), i = items.indexOf(document.activeElement);
+    const next = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: items.length - 1 }[e.key];
+    items[(next + items.length) % items.length].focus();
+  });
   return wrap;
 }
 document.addEventListener("click", () => $$(".menu").forEach((m) => { m.hidden = true; }));
@@ -152,13 +161,19 @@ const STATUS_TEXT = { idle: "idle", detecting: "detecting", preparing: "preparin
 
 // ------------------------------------------------------------------ routing
 
-let view = "overview", timer = null;
+let view = "overview", timer = null, unsaved = false, lastHash = location.hash;
+window.addEventListener("beforeunload", (e) => { if (unsaved) e.preventDefault(); });
 const route = () => {
   const [path, query] = location.hash.slice(1).split("?");
   const [name, sub] = path.split("/");
   return { name: name || "overview", sub: sub ? decodeURIComponent(sub) : "", query: new URLSearchParams(query || "") };
 };
 async function render() {
+  if (unsaved && location.hash !== lastHash && !confirm("Leave without saving your changes?")) {
+    history.replaceState(null, "", lastHash); // stay on the page with the unsaved changes
+    return;
+  }
+  unsaved = false; lastHash = location.hash;
   clearInterval(timer); clearTimeout(timer);
   main.oninput = main.onchange = null; // page-specific listeners never outlive their page
   const r = route();
@@ -294,7 +309,7 @@ async function networkCheck(id) {
 function captureProfile(o) {
   const d = openDialog("Capture device profile", { small: true, id: "profile-dlg" });
   d.body.innerHTML = `<p class="muted">Records how the camera answers, so a driver can be written or fixed. Wi-Fi passwords are not included.</p>
-    <label for="p-host">Camera address</label><input id="p-host" value="${esc(o.host || "")}" placeholder="192.168.1.254">
+    <label for="p-host">Camera address</label><input id="p-host" name="host" autocomplete="off" spellcheck="false" inputmode="url" value="${esc(o.host || "")}" placeholder="192.168.1.254">
     <div id="p-out"></div><div class="actions end"><button class="text" id="p-cancel">Cancel</button><button class="primary" id="p-go">Capture</button></div>`;
   $("#p-cancel", d.dlg).onclick = d.close;
   $("#p-go", d.dlg).onclick = async () => {
@@ -318,8 +333,8 @@ async function cameras() {
     $("#add").onclick = () => wizard();
     for (const { options: o, status: s } of list) {
       const card = document.createElement("div");
-      card.className = "card cam-card"; card.dataset.id = o.id; card.tabIndex = 0;
-      card.innerHTML = `<div class="head"><span class="name">${esc(o.name || o.id)}</span></div>
+      card.className = "card cam-card"; card.dataset.id = o.id;
+      card.innerHTML = `<div class="head"><a class="name" href="#cameras/${encodeURIComponent(o.id)}">${esc(o.name || o.id)}</a></div>
         <div class="sub">${statusBadge(s, o.enabled)}${s && !["idle", "error"].includes(s.sync_status) ? ` <span class="badge info">${esc(STATUS_TEXT[s.sync_status] || s.sync_status)}</span>` : ""}</div>
         <div class="sub">${connLine(o)} · last sync ${ago(s?.last_sync)}</div>
         ${s?.error ? `<div class="sub bad-text">${esc(s.error)}</div>` : ""}
@@ -327,9 +342,8 @@ async function cameras() {
         <div class="actions" style="margin-top:12px"><button class="sync-now" data-act="sync" ${s?.connected && o.enabled ? "" : "disabled"}>Sync now</button></div>`;
       $(".head", card).append(cameraMenu(o, draw));
       $(".sync-now", card).onclick = (e) => { e.stopPropagation(); syncNow(o.id); };
-      const open = (e) => { if (!e.target.closest("button, .menu-wrap")) location.hash = "#cameras/" + encodeURIComponent(o.id); };
-      card.onclick = open;
-      card.onkeydown = (e) => { if (e.key === "Enter" && e.target === card) open(e); };
+      // The name is the keyboard and middle-click link; the rest of the card is a larger tap target.
+      card.onclick = (e) => { if (!e.target.closest("button, a, .menu-wrap")) location.hash = "#cameras/" + encodeURIComponent(o.id); };
       $("#cam-list").append(card);
     }
   };
@@ -441,27 +455,27 @@ async function wizard(existing) {
           : ifaces.wireless.length ? `<select id="w-if">${ifaces.wireless.map((i) => `<option value="${esc(i.name)}" ${i.name === st.interface ? "selected" : ""}>${esc(i.name)} · ${esc(ifaceNote(i))}</option>`).join("")}</select>`
           : `<input id="w-if" value="${esc(st.interface)}" placeholder="wlan0"><div class="hint">${ifaces.known ? "Home Assistant reports no Wi-Fi interface. A supported USB Wi-Fi adapter is the usual fix." : "Interfaces are not available here; type the name shown under Settings › System › Network."}</div>`}
         <label for="w-ssid">Camera SSID</label>
-        <div class="field-row"><input id="w-ssid" value="${esc(st.ssid)}" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="w-scan">Scan</button></div>
+        <div class="field-row"><input id="w-ssid" name="ssid" value="${esc(st.ssid)}" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="w-scan">Scan</button></div>
         <div id="w-aps">${apList()}</div>
         <label for="w-pass">Camera Wi-Fi password</label>
-        <input id="w-pass" type="password" autocomplete="off" placeholder="${edit ? "leave empty to keep the current one" : ""}">
+        <input id="w-pass" name="wifi-password" type="password" autocomplete="new-password" placeholder="${edit ? "leave empty to keep the current one" : ""}">
         <label for="w-camip">Camera IP on its hotspot</label>
         <select id="w-camip">${Object.entries(CAMERA_IPS).map(([ip, t]) => `<option value="${ip}" ${camIp() === ip ? "selected" : ""}>${ip} · ${t}</option>`).join("")}
           <option value="other" ${camIp() === "other" ? "selected" : ""}>Other…</option></select>
-        <input id="w-camip-other" value="${camIp() === "other" ? esc(st.host) : ""}" placeholder="e.g. 192.168.0.1" style="margin-top:8px" ${camIp() === "other" ? "" : "hidden"}>
+        <input id="w-camip-other" name="camera-ip" autocomplete="off" spellcheck="false" inputmode="url" value="${camIp() === "other" ? esc(st.host) : ""}" placeholder="e.g. 192.168.0.1" style="margin-top:8px" ${camIp() === "other" ? "" : "hidden"}>
         <div class="hint">Shown in the camera's phone app or manual. Home Assistant's address on the camera network is picked next to it.</div>`;
     } else if (step === 2) {
       body = `<label for="w-host">Camera IP or host</label>
-        <div class="field-row"><input id="w-host" value="${esc(st.host)}" placeholder="192.168.2.50"><button id="w-probe">Test</button></div>
+        <div class="field-row"><input id="w-host" name="host" value="${esc(st.host)}" placeholder="192.168.2.50" autocomplete="off" autocapitalize="off" spellcheck="false" inputmode="url"><button id="w-probe">Test</button></div>
         <div class="hint">Leave empty to look for the camera automatically. Give it a DHCP reservation in your router so the address does not change.</div>
         <div id="w-det">${st.detection ? summary(st.detection) : ""}</div>`;
     } else if (step === 3) {
-      body = `<label for="w-name">Name</label><input id="w-name" value="${esc(st.name)}" placeholder="Polestar 2">
+      body = `<label for="w-name">Name</label><input id="w-name" name="camera-name" autocomplete="off" value="${esc(st.name)}" placeholder="Polestar 2">
         <details id="w-adv"><summary>Advanced</summary>
           <label for="w-driver">Driver</label><select id="w-driver">${Object.entries(DRIVERS).map(([k, t]) => `<option value="${k}" ${k === st.driver ? "selected" : ""}>${t}</option>`).join("")}</select>
           ${st.connection === "hotspot" ? `
           <label for="w-ipv4">IPv4 on the camera network</label><select id="w-ipv4"><option value="static" ${st.ipv4 !== "auto" ? "selected" : ""}>Static, small block around the camera (recommended)</option><option value="auto" ${st.ipv4 === "auto" ? "selected" : ""}>DHCP from the camera</option></select>
-          <label for="w-static">Home Assistant address (CIDR)</label><input id="w-static" value="${esc(st.static_address)}" placeholder="computed, e.g. 192.168.1.253/30">` : ""}
+          <label for="w-static">Home Assistant address (CIDR)</label><input id="w-static" name="static-address" autocomplete="off" spellcheck="false" value="${esc(st.static_address)}" placeholder="computed, e.g. 192.168.1.253/30">` : ""}
           <label for="w-id">ID</label><input id="w-id" value="${esc(edit ? st.id : slug(st.name))}" disabled>
           <div class="hint">Used in folder names and entity IDs${edit ? "; it cannot change" : ""}.</div>
         </details>`;
@@ -601,7 +615,7 @@ async function clips() {
       ${list.length > 1 ? `<select id="cam" aria-label="Camera" style="width:auto">${list.map(({ options: o }) => `<option value="${esc(o.id)}" ${o.id === camId ? "selected" : ""}>${esc(o.name || o.id)}</option>`).join("")}</select>` : ""}</div>
     ${data.length ? "" : `<div class="card empty">No clips yet.</div>`}
     ${data.map((c) => `<div class="card clip" data-id="${c.id}">
-      ${c.post_status === "done" ? `<img class="thumb" loading="lazy" src="api/v1/clips/${c.id}/thumb" alt="" onerror="this.style.visibility='hidden'">` : `<div class="thumb" role="img" aria-label="Preparing thumbnail"></div>`}
+      ${c.post_status === "done" ? `<img class="thumb" loading="lazy" width="128" height="72" src="api/v1/clips/${c.id}/thumb" alt="" onerror="this.style.visibility='hidden'">` : `<div class="thumb" role="img" aria-label="Preparing thumbnail"></div>`}
       <div class="meta"><div><span class="badge ${c.kind === "event" ? "warn" : ""}">${esc(c.kind)}</span> ${c.keep ? '<span class="badge info">kept</span>' : ""} <span class="muted">${esc(c.channel)}</span></div>
         <div>${when(c.start)}</div>
         <div class="small muted">${bytes(c.size)}${c.duration ? " · " + Math.round(c.duration) + " s" : ""} · ${c.copies.map((x) => (x.target === "local" ? "this HA" : x.target === "network" ? "disk/share" : esc(x.target))).join(", ")}</div></div>
@@ -743,7 +757,7 @@ async function settings() {
     <div class="card">
       <label for="l-target">Keep clips on</label>
       <select id="l-target">${Object.entries({ local: "This Home Assistant", network: "A disk or share", both: "Both" }).map(([v, t]) => `<option value="${v}" ${v === so.target ? "selected" : ""}>${t}</option>`).join("")}</select>
-      <div id="l-local-row"><label for="l-local">Local folder (under /media)</label><input id="l-local" value="${esc(so.local_folder)}"></div>
+      <div id="l-local-row"><label for="l-local">Local folder (under /media)</label><input id="l-local" name="local-folder" autocomplete="off" spellcheck="false" value="${esc(so.local_folder)}"></div>
       <div id="l-net-row">
         <label for="l-net">Disk or share</label>
         ${netOptions ? `<select id="l-net">${netOptions}</select>` : `<div class="hint" id="l-net-none">None attached. Add a network share or a local disk (USB drive, SD card) under <a href="/config/storage" target="_top">Settings › System › Storage</a>, with usage Media or Share.</div>`}
@@ -769,6 +783,7 @@ async function settings() {
   let clean = snapshot();
   const dirty = () => {
     const changed = snapshot() !== clean;
+    unsaved = changed;
     $("#savebar").classList.toggle("dirty", changed);
     if (changed) $("#savebar").hidden = false;
     $("#save").disabled = $("#discard").disabled = !changed;
@@ -777,7 +792,7 @@ async function settings() {
   main.oninput = dirty;
   main.onchange = () => { vis(); dirty(); };
   $("#l-target").onchange = vis; vis();
-  $("#discard").onclick = () => settings();
+  $("#discard").onclick = () => { unsaved = false; settings(); };
   $("#save").onclick = async () => {
     const bad = $$("input", main).find((el) => !el.closest("[hidden]") && !el.checkValidity());
     if (bad) {

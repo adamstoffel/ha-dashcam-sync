@@ -111,6 +111,12 @@ async function waitFor(fn, what, timeout = 30000) {
     assert.equal(await page.locator("#l-net-row").isHidden(), true, "no disk picker while local");
     assert.equal(await page.locator("#network_ret").isHidden(), true, "no disk retention while local");
     await page.check("input[name=s-mode][value=events_only]");
+    // Leaving with unsaved changes asks first; declining keeps the page and the edits.
+    page.once("dialog", (d) => d.dismiss());
+    await page.click("nav a[href='#logs']");
+    await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(() => location.hash), "#settings", "stayed on unsaved settings");
+    assert.equal(await page.locator("input[name=s-mode][value=events_only]").isChecked(), true);
     await page.fill("#normal_days", "3");
     await page.selectOption("#s-del", "normal");
     await page.click("#save");
@@ -200,6 +206,8 @@ async function waitFor(fn, what, timeout = 30000) {
     // Actions live in a ⋮ menu; Edit keeps the stored password when it is left blank.
     const hot = page.locator("main .card[data-id=hotspot_cam]");
     await hot.locator(".menu-btn").click();
+    await page.keyboard.press("ArrowDown");
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), "Network check", "arrow keys move through the menu");
     const menuItems = await hot.locator(".menu button").allInnerTexts();
     assert.deepEqual(menuItems, ["Edit", "Network check", "Restore recording", "Pause", "Capture device profile", "Remove"]);
     await hot.locator(".menu button[data-act=edit]").click();
@@ -265,7 +273,7 @@ async function waitFor(fn, what, timeout = 30000) {
     // ---- Keyboard reachability: tabbing from the top reaches the nav links.
     await page.goto(PANEL);
     await page.keyboard.press("Tab");
-    assert.equal(await page.evaluate(() => document.activeElement.tagName), "A");
+    assert.equal(await page.evaluate(() => document.activeElement.textContent), "Skip to content", "the first stop is the skip link");
   } catch (err) {
     failures.push(err.stack || String(err));
   } finally {

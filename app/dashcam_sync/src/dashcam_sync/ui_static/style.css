@@ -15,7 +15,10 @@
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
-body { margin: 0; font: 14px/1.5 var(--font); background: var(--bg); color: var(--fg); overflow-x: hidden; }
+body { margin: 0; font: 14px/1.5 var(--font); background: var(--bg); color: var(--fg); overflow-x: hidden;
+  touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.skip { position: absolute; left: 8px; top: -48px; z-index: 60; background: var(--card); padding: 8px 12px; border-radius: 8px; }
+.skip:focus { top: 8px; }
 a { color: var(--accent); }
 img, video, select, input, textarea, table, pre { max-width: 100%; }
 code { font-size: 0.92em; }
@@ -34,7 +37,7 @@ main { max-width: 1040px; margin: 0 auto; padding: 16px 16px 96px; }
 footer { max-width: 1040px; margin: 0 auto; padding: 0 16px 24px; color: var(--fg2); font-size: 12px; }
 
 /* --------------------------------------------------------------------- layout */
-h2 { font-size: 16px; font-weight: 500; margin: 24px 0 8px; }
+h2 { font-size: 16px; font-weight: 500; margin: 24px 0 8px; text-wrap: balance; }
 h2:first-child { margin-top: 4px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow);
   padding: 16px; margin: 0 0 12px; min-width: 0; }
@@ -103,11 +106,12 @@ details > summary:hover { color: var(--fg); }
 .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--line); border-top-color: var(--accent);
   border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: -3px; }
 @keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } * { scroll-behavior: auto; } }
 .empty { text-align: center; padding: 32px 16px; color: var(--fg2); }
 
 /* ------------------------------------------------------------------ tables */
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; word-break: break-word; }
+th, td { font-variant-numeric: tabular-nums; text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; word-break: break-word; }
 th { color: var(--fg2); font-weight: 500; font-size: 12px; }
 table.kv td { padding: 6px 12px 6px 0; vertical-align: middle; }
 table.kv td:first-child { color: var(--fg2); white-space: nowrap; }
@@ -122,7 +126,7 @@ dl.kv dt { color: var(--fg2); } dl.kv dd { margin: 0; min-width: 0; word-break: 
 .menu button { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; padding: 0 16px; min-height: 40px; color: var(--fg); font-weight: 400; }
 .menu button.danger { color: var(--bad); }
 .menu hr { border: 0; border-top: 1px solid var(--line); margin: 6px 0; }
-dialog { border: 0; padding: 0; border-radius: 16px; background: var(--card); color: var(--fg); width: min(600px, calc(100vw - 32px));
+dialog { overscroll-behavior: contain; border: 0; padding: 0; border-radius: 16px; background: var(--card); color: var(--fg); width: min(600px, calc(100vw - 32px));
   max-height: calc(100dvh - 48px); box-shadow: 0 12px 48px rgba(0, 0, 0, 0.35); }
 dialog::backdrop { background: rgba(0, 0, 0, 0.45); }
 dialog .dlg-head { display: flex; align-items: center; gap: 8px; padding: 12px 8px 4px 24px; position: sticky; top: 0; background: var(--card); z-index: 1; }
@@ -130,7 +134,8 @@ dialog .dlg-head h2 { flex: 1; margin: 0; font-size: 20px; font-weight: 400; }
 dialog .dlg-body { padding: 8px 24px 24px; overflow: auto; }
 dialog.small { width: min(420px, calc(100vw - 32px)); }
 @media (max-width: 600px) {
-  dialog.sheet { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; margin: 0; }
+  dialog.sheet { width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh; border-radius: 0; margin: 0;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
   dialog .dlg-body { padding: 8px 16px 24px; }
   dialog .dlg-head { padding-left: 16px; }
 }
@@ -140,12 +145,12 @@ dialog.small { width: min(420px, calc(100vw - 32px)); }
 .step-title { font-size: 13px; color: var(--fg2); margin: 0 0 12px; }
 
 /* --------------------------------------------------------------- toast & bars */
-#toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; max-width: calc(100vw - 32px);
+#toast { position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 50; max-width: calc(100vw - 32px);
   background: #323232; color: #fff; padding: 12px 20px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3); }
 #toast[hidden] { display: none; }
 #toast.bad { background: var(--bad); }
 .savebar { position: sticky; bottom: 0; z-index: 4; display: flex; gap: 8px; align-items: center; justify-content: flex-end; flex-wrap: wrap;
-  margin: 16px -16px -96px; padding: 12px 16px; background: var(--card); border-top: 1px solid var(--line); }
+  margin: 16px -16px -96px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); background: var(--card); border-top: 1px solid var(--line); }
 .savebar[hidden] { display: none; }
 .savebar .status { margin-right: auto; color: var(--fg2); }
 .savebar.dirty .status { color: var(--fg); font-weight: 500; }
@@ -154,7 +159,8 @@ dialog.small { width: min(420px, calc(100vw - 32px)); }
 .cam-card { cursor: pointer; }
 .cam-card .head { display: flex; align-items: center; gap: 8px; min-height: 40px; }
 .cam-card .sub .badge + .badge { margin-left: 4px; }
-.cam-card .head .name { flex: 1; min-width: 0; font-size: 16px; font-weight: 500; word-break: break-word; }
+.cam-card .head .name { flex: 1; min-width: 0; font-size: 16px; font-weight: 500; word-break: break-word; color: inherit; text-decoration: none; }
+.cam-card .head a.name:hover { text-decoration: underline; }
 .cam-card .sub { color: var(--fg2); margin-top: 4px; word-break: break-word; }
 .cam-card .progress { margin-top: 8px; }
 
@@ -172,7 +178,7 @@ dialog.small { width: min(420px, calc(100vw - 32px)); }
 
 /* -------------------------------------------------------------------- clips */
 .clip { display: flex; gap: 12px; align-items: center; }
-.clip .meta { flex: 1; min-width: 0; }
+.clip .meta { flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }
 .thumb { width: 128px; height: 72px; object-fit: cover; background: #000; border-radius: 8px; flex: none; }
 @media (max-width: 520px) { .clip { flex-wrap: wrap; } .thumb { width: 100%; height: auto; aspect-ratio: 16 / 9; } }
 video { width: 100%; border-radius: var(--radius); background: #000; }
