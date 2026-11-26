@@ -164,12 +164,18 @@ async function waitFor(fn, what, timeout = 30000) {
     await page.click("#add");
     await page.click("#w-next");  // Camera hotspot is the default
     await page.fill("#w-if", "wlan9");
+    // Scanning goes through Home Assistant; with no integration it says so calmly.
+    await page.click("#w-scan");
+    // An interim "Asking Home Assistant…" note comes first: wait for the answer itself.
+    await waitFor(async () => /integration is not connected/.test(await page.locator("#w-err").innerText()), "the scan answer");
+    assert.equal(await page.locator("#w-err .notice.bad").count(), 0, "not shown as an error");
     await page.fill("#w-ssid", "CARDV-1234");
     await page.fill("#w-pass", "secret-pass");
+    assert.equal(await page.locator("#w-camip").inputValue(), "192.168.1.254", "the usual camera IP is preselected");
+    await page.selectOption("#w-camip", "other");
+    await page.fill("#w-camip-other", "127.0.0.1:9");  // a closed port: nothing answers there
     await page.click("#w-next");
     await page.fill("#w-name", "Hotspot cam");
-    await page.click("#w-adv summary");
-    await page.fill("#w-adv #w-host", "127.0.0.1:9");  // a closed port: nothing answers there
     await page.click("#w-next");
     await page.waitForSelector("#w-connect table.kv", { timeout: 8000 }).catch(async (e) => {
       throw new Error(e.message + "\nwizard shows: " + (await page.locator("#wizard").innerText()));
@@ -186,6 +192,8 @@ async function waitFor(fn, what, timeout = 30000) {
     // Editing keeps the stored password when it is left blank.
     const hot = page.locator("main .card[data-id=hotspot_cam]");
     await hot.locator("button:text('Edit')").click();
+    assert.equal(await page.locator("#w-camip").inputValue(), "other");
+    assert.equal(await page.locator("#w-camip-other").inputValue(), "127.0.0.1:9");
     await page.fill("#w-ssid", "CARDV-5678");
     await page.click("#w-next");
     await page.click("#w-next");

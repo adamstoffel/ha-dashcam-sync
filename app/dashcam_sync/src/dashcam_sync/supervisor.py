@@ -79,6 +79,10 @@ class SupervisorClient:
     async def delete_discovery(self, uuid: str) -> None:
         await self._request("DELETE", f"/discovery/{uuid}")
 
+    async def self_info(self) -> dict[str, Any]:
+        data = await self._request("GET", "/addons/self/info")
+        return data if isinstance(data, dict) else {}
+
     async def set_options(self, options: dict[str, Any]) -> None:
         await self._request("POST", "/addons/self/options", {"options": options})
 
@@ -113,7 +117,13 @@ class FileOptionsStore:
 
 
 class SupervisorOptionsStore:
-    """Writes through ``POST /addons/self/options``; reads the local file."""
+    """Options stored by the Supervisor, mirrored in ``/data/options.json``.
+
+    ``POST /addons/self/options`` only stores the options in the Supervisor; it writes
+    ``/data/options.json`` when the app *starts*. So a write here also updates the file
+    (what the Supervisor would write on the next start), and :meth:`sync` copies edits
+    made elsewhere, such as the Configuration tab, into the file while the app runs.
+    """
 
     def __init__(self, client: SupervisorClient, path: Path) -> None:
         self._client = client
@@ -123,4 +133,14 @@ class SupervisorOptionsStore:
         return await self._file.read()
 
     async def write(self, options: dict[str, Any]) -> None:
-        await self._client.set_options(options)
+        await self._client.set_options(options)  # validated and stored, or raises
+        await self._file.write(options)
+
+    async def sync(self) -> bool:
+        """Copy the Supervisor's stored options into the file; True when they differed."""
+        info = await self._client.self_info()
+        options = info.get("options")
+        if not isinstance(options, dict) or options == await self._file.read():
+            return False
+        await self._file.write(options)
+        return True

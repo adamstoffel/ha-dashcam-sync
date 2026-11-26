@@ -112,6 +112,10 @@ async def errors_middleware(request: web.Request, handler: Any) -> web.StreamRes
         raise
     except ConfigError as err:
         return _error(400, str(err))
+    except SupervisorError as err:
+        # 400 is the Supervisor refusing the options (it names the field); else unreachable.
+        status = 400 if err.status == 400 else 502
+        return _error(status, f"Home Assistant refused this: {err}")
     except DashcamError as err:
         return _error(502, str(err))
 
@@ -602,25 +606,66 @@ async def options_get(request: web.Request) -> web.Response:
 # ------------------------------------------------------------------- wizard
 
 
+def _access_points(raw: Any) -> list[dict[str, Any]]:
+    """Scan results, cleaned: strings and numbers only, strongest first, no duplicates."""
+    best: dict[str, dict[str, Any]] = {}
+    for ap in raw if isinstance(raw, list) else []:
+        if not isinstance(ap, dict) or not isinstance(ap.get("ssid"), str) or not ap["ssid"]:
+            continue
+        signal = ap.get("signal") if isinstance(ap.get("signal"), int) else None
+        entry = {"ssid": ap["ssid"][:64], "signal": signal, "mode": str(ap.get("mode") or "")[:20]}
+        seen = best.get(entry["ssid"])
+        if seen is None or (signal or -1) > (seen["signal"] or -1):
+            best[entry["ssid"]] = entry
+    return sorted(best.values(), key=lambda a: -(a["signal"] or -1))[:100]
+
+
 async def wizard_wifi_scan(request: web.Request) -> web.Response:
+    """Networks a Wi-Fi interface can see: the Supervisor directly, else through Home Assistant."""
     d = _daemon(request)
     interface = request.query.get("interface", "")
-    if d.supervisor is None or not d.supervisor.available:
-        return web.json_response({"available": False, "accesspoints": []})
-    try:
-        aps = await d.supervisor.access_points(interface)
-    except SupervisorError as err:
-        # The default role may not be allowed to scan: the wizard asks for the SSID by hand.
-        return web.json_response({"available": False, "accesspoints": [], "reason": str(err)})
+    if not interface:
+        return _error(400, "interface is required")
+    if d.supervisor is not None and d.supervisor.available:
+        try:
+            aps = await d.supervisor.access_points(interface)
+            return web.json_response(
+                {"available": True, "via": "app", "accesspoints": _access_points(aps)}
+            )
+        except SupervisorError:
+            pass  # the default role may not scan: ask Home Assistant instead
+    result = await d.scan_via_home_assistant(interface)
+    if result.get("error"):
+        return web.json_response(
+            {"available": False, "accesspoints": [], "reason": result["error"]}
+        )
     return web.json_response(
         {
             "available": True,
-            "accesspoints": [
-                {"ssid": ap.get("ssid"), "signal": ap.get("signal"), "mode": ap.get("mode")}
-                for ap in aps
-            ],
+            "via": "home_assistant",
+            "accesspoints": _access_points(result.get("accesspoints")),
         }
     )
+
+
+async def wizard_wifi_scan_result(request: web.Request) -> web.Response:
+    """The integration answers a scan request (token port only)."""
+    d = _daemon(request)
+    if not request.app[SECRETS]:
+        return _error(403, "only Home Assistant reports scan results")
+    body = await _json(request)
+    req = body.get("request")
+    if not isinstance(req, str):
+        return _error(400, "request is required")
+    error = body.get("error")
+    result = (
+        {"error": str(error)[:200]}
+        if error
+        else {"accesspoints": _access_points(body.get("accesspoints"))}
+    )
+    if not d.set_scan_result(req, result):
+        return _error(404, "no scan is waiting for that request")
+    return web.json_response({"ok": True})
 
 
 async def wizard_probe(request: web.Request) -> web.Response:
@@ -870,6 +915,7 @@ def _add_routes(app: web.Application) -> None:
     r.add_post(f"{API}/wizard/capture-profile", wizard_capture_profile)
     r.add_post(f"{API}/wizard/station", wizard_station)
     r.add_get(f"{API}/wizard/interfaces", wizard_interfaces)
+    r.add_post(f"{API}/wizard/wifi-scan-result", wizard_wifi_scan_result)
     r.add_post(f"{API}/cameras/{{camera}}/join", camera_join)
     r.add_get(f"{API}/cameras/{{camera}}/join", camera_join_status)
     r.add_post(f"{API}/cameras/{{camera}}/join-result", camera_join_result)

@@ -64,6 +64,7 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
         self.ws_connected = False
         self.unsafe_handler: Callable[[list[str]], Any] | None = None
         self.join_handler: Callable[[str], Any] | None = None
+        self.scan_handler: Callable[[str, str], Any] | None = None
 
     # ---------------------------------------------------------------- polling
 
@@ -217,6 +218,10 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
             if unsafe and self.unsafe_handler is not None:
                 self.hass.async_create_task(self.unsafe_handler(unsafe))
             self.hass.async_create_task(self.async_force_refresh(immediate=False))
+        elif kind == "scan_wifi":
+            interface, request = message.get("interface"), message.get("request")
+            if isinstance(interface, str) and isinstance(request, str) and self.scan_handler:
+                self.hass.async_create_task(self.scan_handler(interface, request))
         elif kind == "join_wifi":
             camera = message.get("camera")
             if isinstance(camera, str) and self.join_handler is not None:

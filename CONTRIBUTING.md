@@ -43,6 +43,16 @@ Or just use the Makefile: `make setup`, then `make check` (lint, types, tests, e
 
 See [docs/writing-a-driver.md](docs/writing-a-driver.md). In short: capture a device profile (panel › Cameras › Capture device profile), turn it into a fixture in `app/tests/fixtures/`, write the driver against it, and CI replays every fixture against every driver to catch false positives. New drivers ship as experimental until two users confirm them on real hardware.
 
+## Trying a branch on a real Home Assistant
+
+In the Terminal & SSH app on Home Assistant OS:
+
+```sh
+wget -qO- https://raw.githubusercontent.com/adamstoffel/ha-dashcam-sync/<branch>/scripts/install-on-ha.sh | sh -s -- <branch>
+```
+
+It copies the app into the local apps folder (built on that machine) and the integration into `custom_components`, gives the app a new version number so the Supervisor reloads its options and translations (a `-dev` suffix would not work: pre-releases sort before the installed version), and updates it. Then restart Home Assistant and hard-refresh the panel.
+
 ## Branches and releases
 
 - `main` is the default branch and is protected by repository rulesets (Settings › Rules): work happens on a branch, lands by pull request (squash or rebase) once every CI job is green, and history stays linear. The required checks are listed by CI job name, so if you rename a job in `.github/workflows/ci.yml`, update the ruleset too or merges will wait for a check that never runs.

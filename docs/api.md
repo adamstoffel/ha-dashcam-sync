@@ -28,6 +28,7 @@ Push messages (`{"type": ..., "ts": ..., "rev": ...}`):
 | `session` | `camera`, `result` (`sync_completed` or `sync_failed`), `clips`, `bytes` or `reason`, `error` | A sync session ended. |
 | `safety` | `route_unsafe` (camera ids) | The default route moved onto a hotspot interface: disconnect the Wi-Fi. |
 | `overlap` | `camera`, `report` | The address-block check result changed. |
+| `scan_wifi` | `interface`, `request` | The wizard wants the networks an interface can see; the integration answers with `POST /wizard/wifi-scan-result`. |
 | `join_wifi` | `camera` | The panel asked Home Assistant to join this hotspot camera's Wi-Fi; the integration answers with `POST /cameras/{id}/join-result`. |
 | `migration` | the `job` fields of `GET /storage/migration` | Progress of a clip move, once per clip and at the end. |
 | `options`, `purge_completed`, `issue`, `clip_keep`, `clip_deleted` | varies | Things the integration should re-read. |
@@ -74,7 +75,8 @@ Push messages (`{"type": ..., "ts": ..., "rev": ...}`):
 | --- | --- |
 | `GET /options` | The app options (passwords masked on the ingress port). |
 | `GET /logs?lines=300` | The app's recent log lines. |
-| `GET /wizard/wifi-scan?interface=wlan0` | Wi-Fi scan; `available: false` when the default role may not scan (type the SSID instead). |
+| `GET /wizard/wifi-scan?interface=` | Networks an interface can see (`ssid`, `signal`, strongest first). The app's own role may not scan, so it asks Home Assistant (a `scan_wifi` push to the integration, up to 25 s); `available: false` with a `reason` (`integration_not_connected`, `no_answer`, or the error) when that is not possible. |
+| `POST /wizard/wifi-scan-result` | The integration answers a scan (`request`, `accesspoints` or `error`). Token port only. |
 | `POST /wizard/probe` | Detect the driver at `{"host": ..., "driver": "auto"}`. |
 | `POST /wizard/block` | Compute the reserved block for `{"camera_ip": ...}`. |
 | `GET /wizard/interfaces` | Wi-Fi interfaces Home Assistant reports (`name`, `enabled`, `connected`, `ssid`, `signal`, `in_use_by`), for choosing a hotspot camera's adapter. |

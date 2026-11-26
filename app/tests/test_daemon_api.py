@@ -521,7 +521,11 @@ async def test_log_level_change_requests_restart(stack: Stack) -> None:
 
 @pytest_asyncio.fixture
 async def fake_supervisor() -> AsyncIterator[tuple[str, list[tuple[str, str, Any]]]]:
+    """Behaves like the real Supervisor where it matters for options: a POST to
+    /addons/self/options stores them (shown in /addons/self/info) and does NOT touch
+    the app's /data/options.json, which the real one only writes when the app starts."""
     calls: list[tuple[str, str, Any]] = []
+    stored: dict[str, Any] = {}
 
     async def handler(request: web.Request) -> web.Response:
         body = await request.json() if request.can_read_body else None
@@ -545,6 +549,17 @@ async def fake_supervisor() -> AsyncIterator[tuple[str, list[tuple[str, str, Any
             return web.json_response({"result": "error", "message": "forbidden"}, status=403)
         if request.path == "/discovery":
             return web.json_response({"result": "ok", "data": {"uuid": "abc123"}})
+        if request.path == "/addons/self/options" and request.method == "POST":
+            stored["options"] = body["options"]
+            return web.json_response({"result": "ok", "data": {}})
+        if request.path == "/addons/self/info":
+            info = {"hostname": "local-dashcam-sync"}
+            if "options" in stored:
+                info["options"] = stored["options"]
+            return web.json_response({"result": "ok", "data": info})
+        if request.path == "/test/configuration-tab":  # what a Configuration-tab edit does
+            stored["options"] = body
+            return web.json_response({"result": "ok", "data": {}})
         return web.json_response({"result": "ok", "data": {}})
 
     app = web.Application()
@@ -629,6 +644,16 @@ async def test_network_monitor_and_options_stores(
     assert await sup.read() == {"x": 1}
     await sup.write({"y": 2})
     assert ("POST", "/addons/self/options", {"options": {"y": 2}}) in calls
+    # The Supervisor does not write the file until the app restarts: the store must.
+    assert await sup.read() == {"y": 2}
+    assert await sup.sync() is False  # already the same
+    async with session.post(
+        f"{url}/test/configuration-tab",
+        json={"z": 3},
+        headers={"Authorization": "Bearer sup-token"},
+    ):
+        pass
+    assert await sup.sync() is True and await sup.read() == {"z": 3}
     path.write_text("[1]")
     assert await store.read() == {}
 
@@ -1068,3 +1093,170 @@ async def test_a_location_change_in_settings_returns_the_move_plan(stack: Stack)
         stack, "PATCH", "/api/v1/settings", {"storage": {"local_folder": "elsewhere"}}
     )
     assert status == 200 and after["migration"]["plan"]["clips"] == 2
+
+
+async def _supervised_daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, url: str) -> Daemon:
+    from dashcam_sync import supervisor as sup_mod
+
+    monkeypatch.setenv("SUPERVISOR_TOKEN", "sup-token")
+    monkeypatch.setattr(sup_mod, "SUPERVISOR_URL", url)
+    monkeypatch.setattr(daemon_mod, "OPTIONS_POLL", 0.05)
+    monkeypatch.setattr(daemon_mod, "OPTIONS_SYNC", 0.05)
+    real_init = SupervisorClient.__init__
+
+    def init(self: SupervisorClient, session: Any, token: Any = None, base_url: str = url) -> None:
+        real_init(self, session, token, url)
+
+    monkeypatch.setattr(SupervisorClient, "__init__", init)
+    data = tmp_path / "d"
+    data.mkdir()
+    (data / "options.json").write_text(json.dumps({"cameras": []}))
+    daemon = Daemon(
+        DaemonConfig(
+            data_dir=data,
+            media_root=tmp_path / "media",
+            share_root=tmp_path / "share",
+            api_port=0,
+            ui_port=0,
+            bind_host="127.0.0.1",
+            api_token=TOKEN,
+        )
+    )
+    await daemon.start()
+    return daemon
+
+
+async def test_panel_edits_apply_at_once_under_the_real_supervisor(
+    fake_supervisor: tuple[str, list[tuple[str, str, Any]]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The wizard saved a camera, then answered 'unknown camera' on a real system."""
+    url, _ = fake_supervisor
+    daemon = await _supervised_daemon(tmp_path, monkeypatch, url)
+    try:
+        api = f"http://127.0.0.1:{daemon.bound_port(0)}"
+        headers = {"Authorization": f"Bearer {TOKEN}"}
+        body = {"id": "hot", "name": "Hot", "connection": "hotspot", "interface": "wlan0",
+                "ssid": "CAM", "wifi_password": "pw", "driver": "auto", "enabled": True}  # fmt: skip
+        async with aiohttp.ClientSession(headers=headers) as http:
+            async with http.post(f"{api}/api/v1/wizard/camera", json=body) as r:
+                assert r.status == 200
+            async with http.post(f"{api}/api/v1/cameras/hot/join") as r:
+                assert r.status == 200, await r.text()  # used to be 404 "unknown camera"
+            async with http.patch(
+                f"{api}/api/v1/settings", json={"sync": {"mode": "events_only"}}
+            ) as r:
+                assert r.status == 200
+        assert daemon.options.camera("hot") is not None
+        assert daemon.options.sync.mode == "events_only"
+    finally:
+        await daemon.stop()
+
+
+async def test_configuration_tab_edits_apply_without_a_restart(
+    fake_supervisor: tuple[str, list[tuple[str, str, Any]]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url, _ = fake_supervisor
+    daemon = await _supervised_daemon(tmp_path, monkeypatch, url)
+    try:
+        async with aiohttp.ClientSession(headers={"Authorization": "Bearer sup-token"}) as http:
+            async with http.post(
+                f"{url}/test/configuration-tab",
+                json={"cameras": [], "sync": {"mode": "everything"}},
+            ):
+                pass
+        await wait_for(lambda: daemon.options.sync.mode == "everything")
+    finally:
+        await daemon.stop()
+
+
+# ------------------------------------------------------ Wi-Fi scan through Home Assistant
+
+
+async def test_a_scan_without_the_integration_says_why(stack: Stack) -> None:
+    _, r = await stack.get("/api/v1/wizard/wifi-scan?interface=wlp4s0")
+    assert r == {"available": False, "accesspoints": [], "reason": "integration_not_connected"}
+
+
+async def test_a_scan_is_answered_through_home_assistant(stack: Stack) -> None:
+    events = stack.daemon.bus.subscribe()  # stands in for the integration's socket
+
+    async def integration() -> None:
+        while True:
+            event = await events.get()
+            if event["type"] == "scan_wifi":
+                break
+        assert event["interface"] == "wlp4s0"
+        status, _ = await stack.post(
+            "/api/v1/wizard/wifi-scan-result",
+            {
+                "request": event["request"],
+                "accesspoints": [
+                    {"ssid": "Weak", "signal": 20},
+                    {"ssid": "CARDV-1234", "signal": 62, "mode": "infrastructure"},
+                    {"ssid": "CARDV-1234", "signal": 40},  # the same network on another band
+                    {"ssid": ""},
+                    "junk",
+                ],
+            },
+        )
+        assert status == 200
+
+    task = asyncio.create_task(integration())
+    _, r = await stack.get("/api/v1/wizard/wifi-scan?interface=wlp4s0")
+    await task
+    assert r["available"] and r["via"] == "home_assistant"
+    assert [a["ssid"] for a in r["accesspoints"]] == ["CARDV-1234", "Weak"]  # strongest first
+    assert r["accesspoints"][0]["signal"] == 62
+
+
+async def test_an_unanswered_scan_times_out_cleanly(
+    stack: Stack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stack.daemon.bus.subscribe()
+    monkeypatch.setattr(daemon_mod, "SCAN_TIMEOUT", 0.1)
+    _, r = await stack.get("/api/v1/wizard/wifi-scan?interface=wlp4s0")
+    assert r["available"] is False and r["reason"] == "no_answer"
+    assert stack.daemon.scans == {}  # nothing left waiting
+
+
+async def test_scan_results_are_only_accepted_from_home_assistant(stack: Stack) -> None:
+    async with stack.http.post(
+        f"{stack.ui}/api/v1/wizard/wifi-scan-result", json={"request": "x"}
+    ) as r:
+        assert r.status == 403
+    status, _ = await stack.post("/api/v1/wizard/wifi-scan-result", {"request": "nobody"})
+    assert status == 404
+    status, _ = await stack.post("/api/v1/wizard/wifi-scan-result", {})
+    assert status == 400
+
+
+async def test_a_refused_scan_from_home_assistant_is_reported(stack: Stack) -> None:
+    events = stack.daemon.bus.subscribe()
+
+    async def integration() -> None:
+        while (event := await events.get())["type"] != "scan_wifi":
+            pass
+        await stack.post(
+            "/api/v1/wizard/wifi-scan-result",
+            {"request": event["request"], "error": "scan failed: busy"},
+        )
+
+    task = asyncio.create_task(integration())
+    _, r = await stack.get("/api/v1/wizard/wifi-scan?interface=wlp4s0")
+    await task
+    assert r == {"available": False, "accesspoints": [], "reason": "scan failed: busy"}
+
+
+async def test_join_status_shows_the_interface_state(stack: Stack) -> None:
+    from dashcam_sync.network import Interface
+
+    await _hotspot(stack)
+    stack.daemon.network.interfaces = [
+        Interface("wlan0", "wireless", True, True, False, ssid="CAM")
+    ]
+    _, j = await stack.get("/api/v1/cameras/hot/join")
+    assert j["interface"] == {"enabled": True, "connected": True, "ssid": "CAM"}

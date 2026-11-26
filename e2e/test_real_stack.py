@@ -311,3 +311,21 @@ async def test_the_panel_asks_home_assistant_to_join_a_hotspot(
     assert joined["state"] == "joined", joined
     profile = apply.await_args.args[1]
     assert profile.ssid == "CARDV" and profile.password == "pw" and profile.prefix == 30
+
+
+async def test_the_wizard_scans_through_home_assistant(hass: HomeAssistant, stack: Stack) -> None:
+    """Wizard → app → push → integration scans (Supervisor client stubbed) → app → wizard."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    await synced(hass, stack)
+    await wait_for(hass, lambda: stack.entry.runtime_data.coordinator.ws_connected)
+    aps = [SimpleNamespace(ssid="CARDV-1234", signal=58, mode="infrastructure")]
+    client = SimpleNamespace(network=SimpleNamespace(access_points=AsyncMock(return_value=aps)))
+    with patch("custom_components.dashcam_sync.wifi._client", return_value=client):
+        task = hass.async_create_task(stack.daemon.scan_via_home_assistant("wlp4s0"))
+        await wait_for(hass, task.done)
+    assert task.result() == {
+        "accesspoints": [{"ssid": "CARDV-1234", "signal": 58, "mode": "infrastructure"}]
+    }
+    client.network.access_points.assert_awaited_once_with("wlp4s0")

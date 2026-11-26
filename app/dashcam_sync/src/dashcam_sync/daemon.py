@@ -61,6 +61,7 @@ _LOGGER = logging.getLogger(__name__)
 
 MIN_TOKEN_LENGTH = 32
 JOIN_TIMEOUT = 45.0  # seconds to wait for Home Assistant to answer a join request
+SCAN_TIMEOUT = 25.0  # seconds to wait for Home Assistant to answer a Wi-Fi scan
 
 NETWORK_POLL = 15.0
 NETWORK_POLL_JOINED = 5.0
@@ -68,6 +69,7 @@ OVERLAP_RECHECK = 6 * 3600.0
 SHIP_INTERVAL = 60.0
 NETWORK_OFFLINE_REPAIR_AFTER = 3600.0
 OPTIONS_POLL = 2.0
+OPTIONS_SYNC = 15.0  # seconds between checks for options edited in the Configuration tab
 
 
 @dataclass(slots=True)
@@ -144,6 +146,8 @@ class Daemon:
         self.migration = Migration()
         # Hotspot joins asked for from the panel; Home Assistant (the integration) does them.
         self.joins: dict[str, dict[str, Any]] = {}
+        # Wi-Fi scans asked of Home Assistant: the app's role may not scan itself.
+        self.scans: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._runners: list[web.AppRunner] = []
         self._options_mtime = 0.0
         self._stop = asyncio.Event()
@@ -409,9 +413,20 @@ class Daemon:
         self._revalidate()
 
     async def _options_loop(self) -> None:
+        last_sync = 0.0
         while True:
             await asyncio.sleep(OPTIONS_POLL)
             try:
+                store = self.store
+                if (
+                    isinstance(store, SupervisorOptionsStore)
+                    and time.monotonic() - last_sync >= OPTIONS_SYNC
+                ):
+                    # Configuration-tab edits only reach the Supervisor, not the file.
+                    last_sync = time.monotonic()
+                    async with self._options_lock:
+                        with contextlib.suppress(SupervisorError):
+                            await store.sync()
                 if await self._load_options():
                     self._build_storage()
                     self._sync_workers()
@@ -572,6 +587,28 @@ class Daemon:
         self.joins[cam.id] = {**state, "ts": time.time()}
         return self.join_status(cam)
 
+    async def scan_via_home_assistant(self, interface: str) -> dict[str, Any]:
+        """Ask the integration to scan (Home Assistant may; this app's role may not)."""
+        if self.bus.subscribers == 0:
+            return {"error": "integration_not_connected"}
+        request = secrets.token_hex(6)
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self.scans[request] = future
+        self.bus.publish("scan_wifi", interface=interface, request=request)
+        try:
+            return await asyncio.wait_for(future, SCAN_TIMEOUT)
+        except TimeoutError:
+            return {"error": "no_answer"}
+        finally:
+            self.scans.pop(request, None)
+
+    def set_scan_result(self, request: str, result: dict[str, Any]) -> bool:
+        future = self.scans.get(request)
+        if future is None or future.done():
+            return False
+        future.set_result(result)
+        return True
+
     def set_join_result(self, camera_id: str, state: str, reason: str | None) -> None:
         self.joins[camera_id] = {"state": state, "reason": reason, "ts": time.time()}
 
@@ -581,9 +618,15 @@ class Daemon:
             join = {"state": "manual", "reason": "no_answer", "ts": join["ts"]}
             self.joins[cam.id] = join
         worker = self.workers.get(cam.id)
+        iface = self.network.interface(cam.interface) if cam.interface else None
         return {
             **join,
             "camera_connected": bool(worker and worker.status.connected),
+            "interface": (
+                {"enabled": iface.enabled, "connected": iface.connected, "ssid": iface.ssid}
+                if iface is not None
+                else None
+            ),
             "profile": self.join_profile(cam),
         }
 
@@ -883,12 +926,16 @@ class Daemon:
         """Read-modify-write the raw options; the file watcher applies them."""
         assert self.store is not None
         async with self._options_lock:  # concurrent edits must not overwrite each other
+            if isinstance(self.store, SupervisorOptionsStore):
+                # Start from the Supervisor's copy: a Configuration-tab edit may not have
+                # reached the file yet, and must not be overwritten.
+                with contextlib.suppress(SupervisorError):
+                    await self.store.sync()
             raw = json.loads(json.dumps(await self.store.read() or self.raw_options))
             mutate(raw)
             await self.store.write(raw)
-            # Apply immediately instead of waiting for the poll.
-            if isinstance(self.store, FileOptionsStore):
-                self._options_mtime = 0.0
+            # Apply now, whatever the file's timestamp says.
+            self._options_mtime = 0.0
             await self._load_options()
             self._build_storage()
             self._sync_workers()

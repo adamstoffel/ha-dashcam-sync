@@ -196,3 +196,41 @@ def test_ha_api_check_ignores_everything_that_is_not_homeassistant(
 
 def test_the_minimum_ha_version_comes_from_hacs_json() -> None:
     assert re.fullmatch(r"\d{4}\.\d{1,2}\.\d+", ha_api.minimum_version())
+
+
+def test_install_on_ha_copies_both_parts_and_bumps_the_version(tmp_path: Path) -> None:
+    """Runs the real script with a fake wget that serves this checkout as the tarball."""
+    import os
+    import subprocess
+    import tarfile
+
+    root = SCRIPTS.parent
+    tarball = tmp_path / "src.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tar:
+        for part in ("app/dashcam_sync", "integration/custom_components/dashcam_sync"):
+            tar.add(root / part, arcname=f"ha-dashcam-sync-x/{part}")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "wget").write_text(f"#!/bin/sh\ncat {tarball}\n")
+    (bin_dir / "wget").chmod(0o755)
+    apps, config = tmp_path / "local_apps", tmp_path / "config"
+    apps.mkdir()
+    config.mkdir()
+    (config / "configuration.yaml").write_text("")
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "DASHCAM_APPS_DIR": str(apps),
+        "DASHCAM_CONFIG_DIR": str(config),
+    }
+    run = subprocess.run(
+        ["sh", str(SCRIPTS / "install-on-ha.sh"), "some-branch"],
+        env=env, capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert run.returncode == 0, run.stderr
+    cfg = (apps / "dashcam_sync" / "config.yaml").read_text()
+    assert "\nimage:" not in cfg
+    version = re.search(r'^version: "(\d{4})\.(\d+)\.(\d{10})"$', cfg, re.MULTILINE)
+    assert version, cfg[:300]
+    assert (config / "custom_components" / "dashcam_sync" / "manifest.json").exists()
+    assert "Check for updates" in run.stdout  # no `ha` command here: the manual steps
+    assert os.access(SCRIPTS / "install-on-ha.sh", os.X_OK)

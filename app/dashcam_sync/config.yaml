@@ -74,12 +74,12 @@ schema:
       interface: str?
       ssid: str?
       wifi_password: password?
-      ipv4: list(auto|static)?
+      ipv4: list(static|auto)?          # first = what the Configuration tab preselects
       static_address: match(^\d+\.\d+\.\d+\.\d+/\d+$)?
       host: str?
       driver: list(auto|novatek|viidure_app|http_index)
       enabled: bool
-      sync_mode: list(events_only|events_first|everything)?
+      sync_mode: list(events_first|events_only|everything)?
   storage:
     target: list(local|network|both)
     local_folder: str

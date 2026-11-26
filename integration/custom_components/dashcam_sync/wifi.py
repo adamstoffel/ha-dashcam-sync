@@ -98,6 +98,26 @@ async def async_list_wifi_interfaces(hass: HomeAssistant) -> list[WifiInterface]
     return out
 
 
+async def async_scan_access_points(hass: HomeAssistant, interface: str) -> list[dict[str, Any]]:
+    """Networks the interface can see, as Search networks under Settings > System > Network does."""
+    client = _client(hass)
+    try:
+        found = await client.network.access_points(interface)
+    except Exception as err:
+        raise WifiUnavailable(f"scan failed: {err}") from err
+    out: list[dict[str, Any]] = []
+    for ap in found:
+        mode = getattr(ap, "mode", None)
+        out.append(
+            {
+                "ssid": getattr(ap, "ssid", None),
+                "signal": getattr(ap, "signal", None),
+                "mode": str(getattr(mode, "value", mode) or ""),
+            }
+        )
+    return out
+
+
 async def async_apply_profile(hass: HomeAssistant, profile: WifiProfile) -> None:
     """Join the camera hotspot with the small-block static address.
 

@@ -33,3 +33,6 @@ table.kv td { padding:3px 10px 3px 0; vertical-align:middle; } table.kv code { f
 details.more { display:inline-block; position:relative; } details.more > summary { display:inline-block; cursor:pointer; padding:6px 10px; border:1px solid var(--line); border-radius:6px; list-style:none; }
 details.more[open] > summary { background:var(--line); } details.more > button { margin:4px 0 0 4px; }
 details#w-adv { margin-top:12px; } details#w-adv > summary { cursor:pointer; opacity:.8; }
+.notice.info { border-left-color:var(--accent); }
+.aps { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; } .aps button.ap { font-size:13px; }
+.notice ul { margin:6px 0 0; padding-left:18px; }

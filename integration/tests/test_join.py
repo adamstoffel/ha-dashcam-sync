@@ -90,3 +90,41 @@ async def test_a_join_request_for_a_bad_camera_value_is_ignored(
     fake_api.push({"type": "join_wifi", "camera": None})
     await hass.async_block_till_done()
     assert fake_api.calls_named("join_result") == []
+
+
+async def test_a_scan_request_is_answered_with_what_home_assistant_sees(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
+) -> None:
+    from types import SimpleNamespace
+
+    aps = [
+        SimpleNamespace(ssid="CARDV-1234", signal=62, mode=SimpleNamespace(value="infrastructure")),
+        SimpleNamespace(ssid="Home", signal=90, mode="infrastructure"),
+    ]
+    client = SimpleNamespace(network=SimpleNamespace(access_points=AsyncMock(return_value=aps)))
+    with patch(f"{W}._client", return_value=client):
+        fake_api.push({"type": "scan_wifi", "interface": "wlp4s0", "request": "r1"})
+        await hass.async_block_till_done()
+    client.network.access_points.assert_awaited_once_with("wlp4s0")
+    [(request, found, error)] = fake_api.calls_named("scan_result")
+    assert request == "r1" and error is None
+    assert found[0] == {"ssid": "CARDV-1234", "signal": 62, "mode": "infrastructure"}
+
+
+async def test_a_failed_scan_is_reported_not_swallowed(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
+) -> None:
+    with patch(f"{W}._client", side_effect=WifiUnavailable("no Supervisor client")):
+        fake_api.push({"type": "scan_wifi", "interface": "wlp4s0", "request": "r2"})
+        await hass.async_block_till_done()
+    [(request, found, error)] = fake_api.calls_named("scan_result")
+    assert request == "r2" and found == [] and "no Supervisor client" in error
+
+
+async def test_scan_requests_with_bad_values_are_ignored(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
+) -> None:
+    fake_api.push({"type": "scan_wifi", "interface": 7, "request": "r3"})
+    fake_api.push({"type": "scan_wifi", "interface": "wlp4s0"})
+    await hass.async_block_till_done()
+    assert fake_api.calls_named("scan_result") == []

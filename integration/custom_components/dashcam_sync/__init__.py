@@ -36,7 +36,13 @@ from .coordinator import DashcamSyncConfigEntry, DashcamSyncCoordinator, Dashcam
 from .issues import IssueSync
 from .services import async_setup_services
 from .views import ClipFileView, ClipThumbView
-from .wifi import async_announced_wifi_adapters, async_disconnect, async_join_camera
+from .wifi import (
+    WifiUnavailable,
+    async_announced_wifi_adapters,
+    async_disconnect,
+    async_join_camera,
+    async_scan_access_points,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -134,6 +140,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry) 
             _LOGGER.warning("Could not report the Wi-Fi join for %s: %s", camera_id, err)
 
     coordinator.join_handler = _join
+
+    async def _scan(interface: str, request: str) -> None:
+        """The panel's wizard asked for the networks an interface can see."""
+        try:
+            found, error = await async_scan_access_points(hass, interface), None
+        except WifiUnavailable as err:
+            found, error = [], str(err)
+        try:
+            await api.async_scan_result(request, found, error)
+        except Exception as err:  # the wizard times out and asks for the SSID by hand
+            _LOGGER.warning("Could not report the Wi-Fi scan for %s: %s", interface, err)
+
+    coordinator.scan_handler = _scan
 
     presence = entry.options.get(CONF_PRESENCE_ENTITY)
     if presence:

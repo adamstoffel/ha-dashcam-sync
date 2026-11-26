@@ -53,7 +53,7 @@ BlackVue, AIT and Ambarella families are planned for 1.1 and 1.2. Unsupported ca
 
 ## Configuration
 
-Everything is stored as the app's options. Edit them in the **Dashcam Sync panel**: **Cameras** (the setup wizard and Edit) and **Settings** (sync, storage, retention). This **Configuration** tab shows the same options as YAML, for anyone who prefers it; the tables below list every key. Two things live in Home Assistant instead, under the integration's **Configure**: the arrival-hint entity and the live camera entity. The daemon hot-reloads the options; only changing `log_level` restarts the app.
+Everything is stored as the app's options. Edit them in the **Dashcam Sync panel**: **Cameras** (the setup wizard and Edit) and **Settings** (sync, storage, retention). This **Configuration** tab shows the same options as YAML, for anyone who prefers it; the tables below list every key. Two things live in Home Assistant instead, under the integration's **Configure**: the arrival-hint entity and the live camera entity. Changes apply without a restart: from the panel at once, from this tab within about 15 seconds. Only changing `log_level` restarts the app.
 
 ### Integration token
 
