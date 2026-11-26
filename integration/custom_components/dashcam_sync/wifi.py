@@ -42,6 +42,8 @@ class WifiProfile:
     address: str
     prefix: int
     block: str
+    # Point-to-point only: the camera, so NetworkManager adds a direct route to it.
+    gateway: str | None = None
 
     def as_placeholders(self) -> dict[str, str]:
         return {
@@ -50,6 +52,7 @@ class WifiProfile:
             "address": self.address,
             "prefix": str(self.prefix),
             "block": self.block,
+            "gateway": self.gateway or "empty",
         }
 
 
@@ -63,6 +66,7 @@ def profile_from_api(wifi: dict[str, Any]) -> WifiProfile:
         address=str(iface.ip),
         prefix=iface.network.prefixlen,
         block=str(iface.network),
+        gateway=str(ipaddress.IPv4Address(wifi["gateway"])) if wifi.get("gateway") else None,
     )
 
 
@@ -119,11 +123,13 @@ async def async_scan_access_points(hass: HomeAssistant, interface: str) -> list[
 
 
 async def async_apply_profile(hass: HomeAssistant, profile: WifiProfile) -> None:
-    """Join the camera hotspot with the small-block static address.
+    """Join the camera hotspot with the address the app picked.
 
     Infrastructure mode, the camera's SSID with a WPA passphrase, a static IPv4
-    address with no gateway and no DNS servers (so the default route and name
-    resolution stay on Ethernet), and IPv6 disabled.
+    address with no DNS servers, and IPv6 disabled. A small block has no
+    gateway. Point-to-point (a /32) names the camera as gateway: that is how
+    NetworkManager gets a direct route to it; the route it adds ranks below the
+    wired one, and the app disconnects the camera if the primary route ever moves.
     """
     client = _client(hass)
     try:
@@ -149,7 +155,7 @@ async def async_apply_profile(hass: HomeAssistant, profile: WifiProfile) -> None
         ipv4=IPv4Config(
             method=InterfaceMethod.STATIC,
             address=[ipaddress.IPv4Interface(f"{profile.address}/{profile.prefix}")],
-            gateway=None,
+            gateway=ipaddress.IPv4Address(profile.gateway) if profile.gateway else None,
             nameservers=[],
         ),
         ipv6=IPv6Config(method=InterfaceMethod.DISABLED),
@@ -229,8 +235,9 @@ async def async_join_camera(
     from .api import DashcamSyncError  # local import keeps this module free of the client
 
     try:
-        profile = profile_from_api(await api.async_wifi(camera_id))
+        # The check first: it may pick a new address, which the profile then carries.
         report = await api.async_overlap(camera_id, known_device_ips(hass))
+        profile = profile_from_api(await api.async_wifi(camera_id))
     except (DashcamSyncError, KeyError, ValueError) as err:
         return "failed", f"app_unavailable: {err}"
     if report.get("blocked"):

@@ -30,6 +30,9 @@ class CameraOptions(BaseModel):
     wifi_password: str | None = None
     ipv4: Literal["auto", "static"] | None = None
     static_address: str | None = None
+    # How Home Assistant takes an address on a hotspot camera's network:
+    # auto (small block, else point-to-point), block, or point_to_point.
+    addressing: Literal["auto", "block", "point_to_point"] | None = None
     host: str | None = None
     driver: Literal["auto", "novatek", "viidure_app", "http_index"] = "auto"
     enabled: bool = True
@@ -52,6 +55,10 @@ class CameraOptions(BaseModel):
     @property
     def display_name(self) -> str:
         return self.name or self.id
+
+    @property
+    def effective_addressing(self) -> Literal["auto", "block", "point_to_point"]:
+        return self.addressing or "auto"
 
     @property
     def effective_ipv4(self) -> Literal["auto", "static"]:

@@ -69,7 +69,8 @@ Normally you do nothing: the app generates a token and hands it to Home Assistan
 | `interface` | Host Wi-Fi adapter for hotspot cameras, for example `wlan0`. |
 | `ssid`, `wifi_password` | The camera hotspot. The password is masked and only shared with the integration. |
 | `ipv4` | `static` (default) claims a small block around the camera. `auto` skips that check, for an interface you set up yourself with DHCP; the automatic join always uses a static address, because a DHCP profile would also take the camera's gateway and DNS. |
-| `static_address` | Home Assistant's address with prefix on the camera network, for example `192.168.1.253/30`. Computed by the wizard. |
+| `addressing` | How Home Assistant takes an address on the camera network. `auto` (default): a small block of four addresses around the camera, or **point-to-point** when one of them is taken on your home network. `block`: always the small block. `point_to_point`: only two addresses are claimed, Home Assistant's (a /32) and the camera's; the profile names the camera as gateway so a direct route to it is installed. That route ranks below your wired one, and the app disconnects the camera if your primary route ever moves to it. |
+| `static_address` | Home Assistant's address with prefix on the camera network: `192.168.1.253/30` for a block, `192.168.1.250/32` for point-to-point. Leave empty to let the app pick; in `auto` it remembers its pick here and changes it only when that address becomes taken. |
 | `host` | Camera IP or hostname; empty means auto-detect. |
 | `driver` | Force a driver, or `auto`. |
 | `enabled` | Pause one camera without deleting it. |

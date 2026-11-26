@@ -260,6 +260,11 @@ const joinReason = (r) => {
   if (key === "app_unavailable") return "Home Assistant could not read the camera's Wi-Fi settings from the app.";
   return esc(JOIN_REASONS[key] || r);
 };
+const ADDRESSING = {
+  auto: "Automatic (recommended)",
+  block: "Small block of 4 addresses",
+  point_to_point: "Point-to-point (2 addresses)",
+};
 const OVERLAP = {
   no_overlap: ["ok", "No overlap with your home network."],
   overlap_block_free: ["ok", "Overlaps your home network, but the reserved addresses are free."],
@@ -299,8 +304,11 @@ async function networkCheck(id) {
     const r = await api(`cameras/${id}/overlap`, { method: "POST", body: {} });
     const [cls, text] = OVERLAP[r.result] || ["warn", r.result];
     d.body.innerHTML = `<p><span class="badge ${cls}">${cls === "ok" ? "OK" : "Problem"}</span> ${esc(text)}</p>
-      <dl class="kv"><dt>Reserved block</dt><dd><code>${esc(r.block || "?")}</code></dd>
-      ${r.conflicts?.length ? `<dt>In use</dt><dd>${esc(r.conflicts.join(", "))}</dd>` : ""}</dl>
+      <dl class="kv">${r.mode === "point_to_point"
+        ? `<dt>Shape</dt><dd>Point-to-point</dd><dt>Claimed</dt><dd><code>${esc((r.claimed || []).join(", "))}</code></dd>`
+        : `<dt>Reserved block</dt><dd><code>${esc(r.block || "?")}</code></dd>`}
+      <dt>Home Assistant</dt><dd><code>${esc(r.static_address || "?")}</code></dd>
+      ${r.conflicts?.length ? `<dt>In use</dt><dd>${r.conflicts.map((c) => `<code>${esc(c)}</code>${r.evidence?.[c] ? ` · ${esc(r.evidence[c])}` : ""}`).join("<br>")}</dd>` : ""}</dl>
       <div class="actions end"><button class="primary" id="o-ok">OK</button></div>`;
     $("#o-ok", d.dlg).onclick = d.close;
   } catch (e) { d.body.innerHTML = `<div class="notice card bad">${esc(e.message)}</div>`; }
@@ -395,7 +403,7 @@ async function wizard(existing) {
     id: existing?.id || "", name: existing?.name || "", connection: existing?.connection || "hotspot",
     interface: existing?.interface || "", ssid: existing?.ssid || "", password: "",
     host: existing?.host || "", driver: existing?.driver || "auto", ipv4: existing?.ipv4 || "static",
-    static_address: existing?.static_address || "", step: edit ? 2 : 1, detection: null, aps: null,
+    static_address: existing?.static_address || "", addressing: existing?.addressing || "auto", step: edit ? 2 : 1, detection: null, aps: null,
   };
   let poller = null;
   d.dlg.addEventListener("closed", () => { clearInterval(poller); render(); });
@@ -411,7 +419,7 @@ async function wizard(existing) {
   const ifaceNote = (i) => (i.in_use_by && i.in_use_by !== st.id ? `used by ${i.in_use_by}` : i.connected ? `connected${i.ssid ? " to " + i.ssid : ""}` : i.enabled ? "not connected" : "not configured · free");
   const read = () => {
     const v = (id) => { const el = $("#" + id, box); return el ? el.value.trim() : undefined; };
-    for (const [k, id] of [["interface", "w-if"], ["ssid", "w-ssid"], ["host", "w-host"], ["name", "w-name"], ["driver", "w-driver"], ["ipv4", "w-ipv4"], ["static_address", "w-static"]]) {
+    for (const [k, id] of [["interface", "w-if"], ["ssid", "w-ssid"], ["host", "w-host"], ["name", "w-name"], ["driver", "w-driver"], ["ipv4", "w-ipv4"], ["addressing", "w-addressing"], ["static_address", "w-static"]]) {
       const val = v(id); if (val !== undefined) st[k] = val;
     }
     const pw = $("#w-pass", box); if (pw) st.password = pw.value;
@@ -426,7 +434,7 @@ async function wizard(existing) {
     return `<div class="card" style="margin:12px 0 0"><b>Detected a ${esc(r.driver)} camera</b> at ${esc(r.host)}${r.firmware ? ` · firmware ${esc(r.firmware)}` : ""}${r.model ? ` · ${esc(r.model)}` : ""}
       <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">${caps}</div>
       ${b ? `<div class="muted small" style="margin-top:8px">Reserved address block ${esc(b.block)} · Home Assistant uses ${esc(b.static_address)}
-        ${b.overlaps_home_network ? '<span class="badge warn">overlaps your home network: only these 4 addresses are claimed</span>' : '<span class="badge ok">no overlap with your home network</span>'}</div>` : ""}</div>`;
+        ${b.overlaps_home_network ? '<span class="badge warn">overlaps your home network: only these 4 addresses are claimed, or 2 if one is taken</span>' : '<span class="badge ok">no overlap with your home network</span>'}</div>` : ""}</div>`;
   };
   const apList = () => {
     if (!st.aps) return "";
@@ -474,7 +482,10 @@ async function wizard(existing) {
         <details id="w-adv"><summary>Advanced</summary>
           <label for="w-driver">Driver</label><select id="w-driver">${Object.entries(DRIVERS).map(([k, t]) => `<option value="${k}" ${k === st.driver ? "selected" : ""}>${t}</option>`).join("")}</select>
           ${st.connection === "hotspot" ? `
-          <label for="w-static">Home Assistant address (CIDR)</label><input id="w-static" name="static-address" autocomplete="off" spellcheck="false" value="${esc(st.static_address)}" placeholder="computed, e.g. 192.168.1.253/30">` : ""}
+          <label for="w-addressing">Address shape on the camera network</label><select id="w-addressing">${Object.entries(ADDRESSING).map(([k, t]) => `<option value="${k}" ${k === st.addressing ? "selected" : ""}>${t}</option>`).join("")}</select>
+          <div class="hint">Automatic uses a small block of 4 addresses around the camera, and point-to-point (only 2 addresses) when one of them is taken at home.</div>
+          <label for="w-static">Home Assistant address (CIDR)</label><input id="w-static" name="static-address" autocomplete="off" spellcheck="false" value="${esc(st.static_address)}" placeholder="picked by the app, e.g. 192.168.1.253/30 or 192.168.1.250/32">
+          <div class="hint">Leave empty to let the app pick a free one. /32 means point-to-point.</div>` : ""}
           <label for="w-id">ID</label><input id="w-id" value="${esc(edit ? st.id : slug(st.name))}" disabled>
           <div class="hint">Used in folder names and entity IDs${edit ? "; it cannot change" : ""}.</div>
         </details>`;
@@ -537,6 +548,7 @@ async function wizard(existing) {
       // Always static: a DHCP profile from the camera would also take its gateway and DNS.
       if (st.connection === "hotspot") Object.assign(body, { interface: st.interface, ssid: st.ssid, wifi_password: st.password, ipv4: "static" });
       if (st.connection === "hotspot" && st.static_address) body.static_address = st.static_address;
+      if (st.connection === "hotspot") body.addressing = st.addressing || "auto";
       const btn = $("#w-next", box); btn.disabled = true;
       try { const r = await api("wizard/camera", { method: "POST", body }); st.id = r.camera; }
       catch (e) { btn.disabled = false; return err(esc(e.message)); }
@@ -569,9 +581,11 @@ async function wizard(existing) {
     const manual = (p, why) => `<div class="card notice" style="margin:12px 0 0"><b>Join the camera's Wi-Fi in Home Assistant</b>${why ? `<div class="muted">${why}</div>` : ""}
       <p>Open <a href="/config/network" target="_top">Settings › System › Network</a>, choose <b>${esc(p.interface)}</b>, then:</p>
       <table class="kv">${[["Wi-Fi mode", "Infrastructure"], ["SSID", p.ssid], ["Security", "WPA-PSK, with the camera password you entered"],
-        ["IPv4", `Static · ${p.address || "?"}`], ["Gateway", "none"], ["DNS servers", "none"], ["IPv6", "Disabled"]]
+        ["IPv4", `Static · ${p.address || "?"}`], ["Gateway", p.gateway || "none"], ["DNS servers", "none"], ["IPv6", "Disabled"]]
         .map(([k, v]) => `<tr><td>${k}</td><td><code>${esc(v)}</code></td><td>${["SSID", "IPv4"].includes(k) && v ? `<button class="text copy" data-v="${esc(k === "IPv4" ? p.address || "" : v)}">Copy</button>` : ""}</td></tr>`).join("")}</table>
-      <div class="hint">No gateway and no DNS keep your default route and name resolution on Ethernet.</div></div>`;
+      <div class="hint">${p.gateway
+        ? "Point-to-point: the camera as gateway gives Home Assistant a direct route to it. That route ranks below your wired connection, and no DNS keeps name resolution on Ethernet."
+        : "No gateway and no DNS keep your default route and name resolution on Ethernet."}</div></div>`;
     const started = Date.now();
     const poll = async () => {
       let j;

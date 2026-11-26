@@ -116,3 +116,105 @@ async def test_address_in_use() -> None:
     report = await check_overlap(block, [], probe=probe)
     assert report.result == "address_in_use"
     assert report.conflicts == ["192.168.1.255"]
+
+
+# ------------------------------------------------------------ point-to-point
+
+
+def test_point_to_point_claims_only_two_addresses() -> None:
+    from dashcam_sync.netblock import block_from_static, point_to_point
+
+    blk = point_to_point("192.168.0.1", "192.168.0.254")
+    assert blk.static_address == "192.168.0.254/32" and blk.gateway == "192.168.0.1"
+    assert [str(a) for a in blk.claimed()] == ["192.168.0.1", "192.168.0.254"]
+    assert blk.mode == "point_to_point" and "only" in blk.describe()
+    assert block_from_static("192.168.0.254/32", "192.168.0.1") == blk
+    assert block_from_static("192.168.0.9/30", "192.168.0.1", force_point_to_point=True).host == (
+        point_to_point("192.168.0.1", "192.168.0.9").host
+    )
+    with pytest.raises(ConfigError):
+        point_to_point("192.168.0.1", "192.168.0.1")
+    with pytest.raises(ConfigError):
+        point_to_point("192.168.0.1", "127.0.0.1")
+    with pytest.raises(ConfigError):
+        block_from_static("nonsense", "192.168.0.1")
+
+
+def test_point_to_point_candidates_come_from_the_top_of_the_camera_subnet() -> None:
+    from dashcam_sync.netblock import point_to_point_candidates
+
+    assert point_to_point_candidates("192.168.0.1", limit=3) == [
+        "192.168.0.254", "192.168.0.253", "192.168.0.252",
+    ]  # fmt: skip
+    assert point_to_point_candidates("192.168.1.254", limit=2) == ["192.168.1.253", "192.168.1.252"]
+
+
+async def test_choose_block_matches_the_real_probe() -> None:
+    """Home 192.168.0.0/22, camera 192.168.0.1, something answers at 192.168.0.2."""
+    from dashcam_sync.netblock import choose_block
+
+    home = [ipaddress.IPv4Network("192.168.0.0/22")]
+    taken = {"192.168.0.2"}
+
+    async def probe(ip: str) -> bool:
+        return ip in taken
+
+    report = await choose_block("192.168.0.1", home, probe=probe)
+    assert not report.blocked and report.block.static_address == "192.168.0.254/32"
+    assert report.result == "overlap_block_free" and report.probed
+
+    taken.add("192.168.0.254")
+    report = await choose_block("192.168.0.1", home, probe=probe)
+    assert report.block.static_address == "192.168.0.253/32"
+
+    # Fixed block: reported as it is, never swapped.
+    fixed = await choose_block("192.168.0.1", home, addressing="block", probe=probe)
+    assert fixed.blocked and fixed.result == "address_in_use"
+
+    # The camera's own address is taken: no shape helps, the block's report explains it.
+    taken.add("192.168.0.1")
+    report = await choose_block("192.168.0.1", home, probe=probe)
+    assert report.blocked and report.result == "camera_collides"
+
+
+async def test_choose_block_keeps_a_free_remembered_pick() -> None:
+    from dashcam_sync.netblock import choose_block
+
+    home = [ipaddress.IPv4Network("192.168.0.0/22")]
+    kept = await choose_block("192.168.0.1", home, static_address="192.168.0.200/32")
+    assert kept.block.static_address == "192.168.0.200/32"
+    p2p = await choose_block("192.168.0.1", home, addressing="point_to_point")
+    assert p2p.block.static_address == "192.168.0.254/32"
+    fixed = await choose_block(
+        "192.168.0.1", home, addressing="point_to_point", static_address="192.168.0.9/32",
+        known_device_ips=["192.168.0.9"],
+    )  # fmt: skip
+    assert fixed.blocked and fixed.block.static_address == "192.168.0.9/32"
+
+
+async def test_nothing_free_reports_the_small_block() -> None:
+    from dashcam_sync.netblock import choose_block
+
+    async def everything(ip: str) -> bool:
+        return ip != "192.168.0.1"
+
+    home = [ipaddress.IPv4Network("192.168.0.0/22")]
+    report = await choose_block("192.168.0.1", home, probe=everything)
+    assert report.blocked and report.block.mode == "block"
+    only_p2p = await choose_block(
+        "192.168.0.1", home, addressing="point_to_point", probe=everything
+    )
+    assert only_p2p.blocked and only_p2p.block.mode == "point_to_point"
+
+
+async def test_the_report_says_how_each_address_answered() -> None:
+    from dashcam_sync.netblock import choose_block
+
+    async def probe(ip: str) -> str:
+        return "refused a connection on port 443 (no ping answer)" if ip == "192.168.0.2" else ""
+
+    home = [ipaddress.IPv4Network("192.168.0.0/22")]
+    fixed = await choose_block("192.168.0.1", home, addressing="block", probe=probe)
+    assert fixed.as_dict()["evidence"] == {
+        "192.168.0.2": "refused a connection on port 443 (no ping answer)"
+    }

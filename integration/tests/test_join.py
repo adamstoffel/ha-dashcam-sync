@@ -140,6 +140,29 @@ async def test_scan_requests_with_bad_values_are_ignored(
     assert fake_api.calls_named("scan_result") == []
 
 
+async def test_the_join_applies_the_address_the_check_just_picked(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
+) -> None:
+    """The check runs first: when it switches to point-to-point, the join uses that."""
+    real_overlap = fake_api.async_overlap
+
+    async def picks_point_to_point(camera: str, known: list[str], probe: bool = True) -> dict:
+        fake_api.wifi = {**fake_api.wifi, "static_address": "192.168.1.200/32",
+                         "gateway": "192.168.1.254", "mode": "point_to_point"}  # fmt: skip
+        return await real_overlap(camera, known, probe)
+
+    fake_api.async_overlap = picks_point_to_point  # type: ignore[method-assign]
+    apply = AsyncMock()
+    with (
+        patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
+        patch(f"{W}.async_apply_profile", apply),
+    ):
+        assert await join(hass, fake_api) == ("polestar_2", "joined", None)
+    profile = apply.await_args.args[1]
+    assert profile.address == "192.168.1.200" and profile.prefix == 32
+    assert profile.gateway == "192.168.1.254"
+
+
 async def test_joins_for_one_camera_never_overlap(
     hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
 ) -> None:

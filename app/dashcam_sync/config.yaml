@@ -75,6 +75,7 @@ schema:
       ssid: str?
       wifi_password: password?
       ipv4: list(static|auto)?          # first = what the Configuration tab preselects
+      addressing: list(auto|block|point_to_point)?
       static_address: match(^\d+\.\d+\.\d+\.\d+/\d+$)?
       host: str?
       driver: list(auto|novatek|viidure_app|http_index)

@@ -33,15 +33,23 @@ configuration:
         name: Camera Wi-Fi password
         description: The hotspot passphrase. It is masked here and only shared with the integration.
       ipv4:
-        name: Addressing
+        name: IPv4 method
         description: >-
-          static (default) claims a small block of four addresses around the camera. auto is only safe
-          when the camera's range does not overlap your home network.
+          static (default): Home Assistant takes a fixed address next to the camera, checked against
+          your home network. auto skips the check, for an interface you set up yourself with DHCP.
+      addressing:
+        name: Address shape
+        description: >-
+          auto (default) uses a small block of four addresses around the camera and, when an address
+          in it is taken on your home network, point-to-point instead. block always uses the small
+          block. point_to_point claims only two addresses (Home Assistant's /32 and the camera's,
+          reached through a direct route).
       static_address:
         name: Home Assistant address on the camera network
         description: >-
-          Home Assistant's address with prefix length, for example 192.168.1.253/30. The wizard
-          computes it; the camera's block is derived from it.
+          Leave empty to let the app pick. With a prefix length, for example 192.168.1.253/30 for a
+          block or 192.168.1.250/32 for point-to-point. In auto, the app fills this in and changes
+          it only when the address it picked becomes taken.
       host:
         name: Camera address
         description: Camera IP or hostname. Leave empty to detect it.

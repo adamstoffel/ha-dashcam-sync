@@ -374,7 +374,18 @@ async def test_wizard_probe_block_storage_and_save(stack: Stack) -> None:
     assert status == 200 and saved["camera"] == "hot"
     raw = json.loads(stack.options_path.read_text())
     entry = next(c for c in raw["cameras"] if c["id"] == "hot")
-    assert entry["static_address"] == "192.168.1.253/30"  # computed small block
+    # Automatic shape: nothing is pinned at save; the network check picks and remembers it.
+    assert "static_address" not in entry
+    status, _ = await stack.post(
+        "/api/v1/wizard/camera",
+        {"id": "hot", "name": "Hot", "connection": "hotspot", "interface": "wlan0",
+         "ssid": "CAM", "wifi_password": "pw", "host": "192.168.1.254",
+         "addressing": "block"},
+    )  # fmt: skip
+    assert status == 200
+    raw = json.loads(stack.options_path.read_text())
+    entry = next(c for c in raw["cameras"] if c["id"] == "hot")
+    assert entry["static_address"] == "192.168.1.253/30"  # block: computed and pinned
     assert (await stack.post("/api/v1/wizard/camera", {"id": "BAD ID"}))[0] == 400
     # Saving again replaces rather than duplicates.
     await stack.post("/api/v1/wizard/camera", {**entry, "name": "Renamed"})
@@ -407,7 +418,9 @@ def hotspot_options(raw: dict[str, Any]) -> None:
 
 
 async def test_overlap_check_blocks_and_reports(stack: Stack) -> None:
-    await stack.daemon.update_raw_options(hotspot_options)
+    await stack.daemon.update_raw_options(
+        lambda raw: (hotspot_options(raw), raw["cameras"][-1].update({"addressing": "block"}))
+    )
     stack.daemon.network.set_interfaces(
         [
             Interface(
@@ -435,6 +448,65 @@ async def test_overlap_check_blocks_and_reports(stack: Stack) -> None:
     assert stack.daemon.blocked_reasons("hot") == []
     assert (await stack.get("/api/v1/cameras/hot/overlap"))[1]["result"] == "overlap_block_free"
     assert (await stack.post("/api/v1/cameras/hot/overlap", {"known_device_ips": "x"}))[0] == 400
+
+
+async def test_automatic_addressing_falls_back_to_point_to_point(stack: Stack) -> None:
+    """The user's real case: an address in the small block is taken at home."""
+    await stack.daemon.update_raw_options(hotspot_options)  # remembered 192.168.1.253/30
+    stack.daemon.network.set_interfaces(
+        [
+            Interface(
+                "eth0", "ethernet", True, True, True, ["192.168.0.20/22"], "192.168.2.1", True
+            ),
+            Interface("wlan0", "wireless", True, False, False),
+        ]
+    )
+    status, report = await stack.post(
+        "/api/v1/cameras/hot/overlap", {"known_device_ips": ["192.168.1.255"], "probe": False}
+    )
+    assert status == 200 and not report["blocked"]
+    assert report["mode"] == "point_to_point"
+    assert report["static_address"] == "192.168.1.253/32"
+    assert report["claimed"] == ["192.168.1.253", "192.168.1.254"]
+    assert report["gateway"] == "192.168.1.254"
+    # Remembered, so the join applies exactly this address.
+    raw = json.loads(stack.options_path.read_text())
+    assert raw["cameras"][-1]["static_address"] == "192.168.1.253/32"
+    _, wifi = await stack.get("/api/v1/cameras/hot/wifi")
+    assert wifi["static_address"] == "192.168.1.253/32" and wifi["gateway"] == "192.168.1.254"
+    assert wifi["mode"] == "point_to_point"
+
+    # The pick itself becomes taken: the next free one is chosen.
+    _, moved = await stack.post(
+        "/api/v1/cameras/hot/overlap",
+        {"known_device_ips": ["192.168.1.255", "192.168.1.253"], "probe": False},
+    )
+    assert moved["static_address"] == "192.168.1.252/32" and not moved["blocked"]
+
+    # Nothing helps when the camera's own address is taken at home.
+    _, collides = await stack.post(
+        "/api/v1/cameras/hot/overlap", {"known_device_ips": ["192.168.1.254"], "probe": False}
+    )
+    assert collides["blocked"] and collides["result"] == "device_in_block"
+    raw = json.loads(stack.options_path.read_text())
+    assert raw["cameras"][-1]["static_address"] == "192.168.1.252/32"  # not rewritten
+
+
+async def test_a_fixed_address_is_never_rewritten(stack: Stack) -> None:
+    await stack.daemon.update_raw_options(
+        lambda raw: (
+            hotspot_options(raw),
+            raw["cameras"][-1].update(
+                {"addressing": "point_to_point", "static_address": "192.168.1.200/32"}
+            ),
+        )
+    )
+    _, report = await stack.post(
+        "/api/v1/cameras/hot/overlap", {"known_device_ips": ["192.168.1.200"], "probe": False}
+    )
+    assert report["blocked"] and report["static_address"] == "192.168.1.200/32"
+    raw = json.loads(stack.options_path.read_text())
+    assert raw["cameras"][-1]["static_address"] == "192.168.1.200/32"
 
 
 async def test_wifi_credentials_only_on_the_token_api(stack: Stack) -> None:

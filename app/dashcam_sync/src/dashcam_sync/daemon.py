@@ -33,7 +33,7 @@ from .netblock import (
     CameraBlock,
     OverlapReport,
     block_from_static,
-    check_overlap,
+    choose_block,
     compute_block,
     tcp_probe,
 )
@@ -563,6 +563,7 @@ class Daemon:
             "ipv4": cam.effective_ipv4,
             "gateway": None,
             "dns": None,
+            "mode": "block",
             "ipv6": "disabled",
         }
         try:
@@ -573,6 +574,8 @@ class Daemon:
             address=block.static_address,
             block=str(block.network),
             camera=str(block.camera),
+            gateway=block.gateway,
+            mode=block.mode,
         )
         return out
 
@@ -742,7 +745,13 @@ class Daemon:
         if not ip:
             raise ConfigError("the camera's address is not known yet")
         if cam.static_address:
-            return block_from_static(cam.static_address, ip)
+            return block_from_static(
+                cam.static_address,
+                ip,
+                force_point_to_point=cam.effective_addressing == "point_to_point",
+            )
+        if cam.effective_addressing == "point_to_point":
+            raise ConfigError("run the network check to pick Home Assistant's address")
         return compute_block(ip)
 
     async def run_overlap_check(
@@ -759,22 +768,52 @@ class Daemon:
             raise ConfigError("the address-block check only applies to hotspot cameras")
         if known_device_ips is not None:
             self.known_device_ips = known_device_ips
-        block = self.block_for(cam)
+        ip = self.camera_ip(cam)
+        if not ip:
+            raise ConfigError("the camera's address is not known yet")
         exclude = {c.interface for c in self.options.cameras if c.interface}
         homes = self.network.home_networks({i for i in exclude if i})
         joined = bool(self.network.link_matches(cam))
-        report = await check_overlap(
-            block,
+        report = await choose_block(
+            ip,
             homes,
+            addressing=cam.effective_addressing,
+            # While joined, keep what is applied: the probe would only hit the camera.
+            static_address=cam.static_address,
             known_device_ips=self.known_device_ips,
             probe=tcp_probe if (probe and not joined) else None,
         )
+        await self._remember_address(cam, report)
         previous = self.overlap.get(camera_id)
         self.overlap[camera_id] = report
         self.overlap_checked[camera_id] = time.time()
         if previous is None or previous.result != report.result:
             self.bus.publish("overlap", camera=camera_id, report=report.as_dict())
         return report
+
+    async def _remember_address(self, cam: CameraOptions, report: OverlapReport) -> None:
+        """Store the address ``choose_block`` picked, so the join applies exactly it.
+
+        Only in ``auto`` and only for a free pick; a user's fixed address is never
+        rewritten.
+        """
+        picked = report.block.static_address
+        fixed = cam.effective_addressing != "auto" and cam.static_address
+        if fixed or report.blocked or picked == cam.static_address:
+            return
+        if cam.effective_addressing == "block" and not cam.static_address:
+            return  # computed the same way every time: nothing to remember
+
+        def mutate(raw: dict[str, Any]) -> None:
+            for entry in raw.get("cameras", []):
+                if entry.get("id") == cam.id:
+                    entry["static_address"] = picked
+
+        _LOGGER.info(
+            "%s: Home Assistant's address on the camera network is now %s (%s)",
+            cam.id, picked, report.block.mode,
+        )  # fmt: skip
+        await self.update_raw_options(mutate)
 
     async def _retention_loop(self) -> None:
         while True:

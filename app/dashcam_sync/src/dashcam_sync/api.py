@@ -284,6 +284,8 @@ async def camera_wifi(request: web.Request) -> web.Response:
             "static_address": block.static_address,
             "block": str(block.network),
             "camera": str(block.camera),
+            "gateway": block.gateway,
+            "mode": block.mode,
             "ipv4": cam.effective_ipv4,
         }
     )
@@ -810,7 +812,19 @@ async def wizard_save_camera(request: web.Request) -> web.Response:
     if cam.host:
         await _camera_host(d, cam.host)
     entry = {k: v for k, v in cam.model_dump().items() if v is not None}
-    if cam.connection == "hotspot" and not entry.get("static_address") and cam.ipv4 != "auto":
+    if (
+        existing is not None
+        and existing.effective_addressing != cam.effective_addressing
+        and cam.static_address == existing.static_address
+    ):
+        # The address was picked for the old shape: let the new one pick its own.
+        entry.pop("static_address", None)
+    if (
+        cam.connection == "hotspot"
+        and not entry.get("static_address")
+        and cam.ipv4 != "auto"
+        and cam.effective_addressing == "block"
+    ):
         ip = d.camera_ip(cam)
         if ip:
             from .netblock import compute_block

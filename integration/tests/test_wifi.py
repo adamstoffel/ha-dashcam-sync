@@ -67,7 +67,7 @@ def test_profile_from_api() -> None:
         and PROFILE.block == "192.168.1.252/30"
     )
     assert PROFILE.as_placeholders() == {
-        "interface": "wlan0", "ssid": "CAM", "address": "192.168.1.253", "prefix": "30", "block": "192.168.1.252/30",
+        "interface": "wlan0", "ssid": "CAM", "address": "192.168.1.253", "prefix": "30", "block": "192.168.1.252/30", "gateway": "empty",
     }  # fmt: skip
     assert (
         wifi.profile_from_api(
@@ -104,6 +104,22 @@ async def test_lists_only_wireless_interfaces(hass: HomeAssistant, hassio: Magic
     hassio.network.info.side_effect = RuntimeError("boom")
     with pytest.raises(WifiUnavailable):
         await wifi.async_list_wifi_interfaces(hass)
+
+
+async def test_apply_profile_point_to_point_names_the_camera_as_gateway(
+    hass: HomeAssistant, hassio: MagicMock
+) -> None:
+    profile = wifi.profile_from_api(
+        {"interface": "wlan0", "ssid": "P2DC", "password": "pw123456",
+         "static_address": "192.168.0.254/32", "gateway": "192.168.0.1"}
+    )  # fmt: skip
+    assert profile.as_placeholders()["gateway"] == "192.168.0.1"
+    await wifi.async_apply_profile(hass, profile)
+    config = hassio.network.update_interface.call_args.args[1]
+    assert config.ipv4.address == [ipaddress.IPv4Interface("192.168.0.254/32")]
+    assert config.ipv4.gateway == ipaddress.IPv4Address("192.168.0.1")
+    assert config.ipv4.nameservers == []  # name resolution stays on Ethernet
+    assert PROFILE.as_placeholders()["gateway"] == "empty"
 
 
 async def test_apply_profile_writes_the_small_block_without_gateway_or_dns(

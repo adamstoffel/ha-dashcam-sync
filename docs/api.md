@@ -43,9 +43,9 @@ Push messages (`{"type": ..., "ts": ..., "rev": ...}`):
 | `DELETE /cameras/{id}` | Remove a camera from the options. |
 | `POST /cameras/{id}/sync` | Start a session now (`409` if the camera is not connected or is paused). |
 | `POST /cameras/{id}/restore` | Force `restore()`: put the camera back into recording. |
-| `GET /cameras/{id}/wifi` | Hotspot SSID, passphrase and the reserved address block. **Token API only.** |
+| `GET /cameras/{id}/wifi` | Hotspot SSID, passphrase, Home Assistant's `static_address`, the `block`, `mode` (`block` or `point_to_point`) and `gateway` (the camera for point-to-point, else `null`). **Token API only.** |
 | `GET /cameras/{id}/overlap` | The last address-block check (runs one without probing if there is none). Hotspot cameras only. |
-| `POST /cameras/{id}/overlap` | Run the check now. Body: `{"known_device_ips": [...], "probe": true}`. |
+| `POST /cameras/{id}/overlap` | Run the check now. Body: `{"known_device_ips": [...], "probe": true}`. With the camera's `addressing` on `auto` it also picks Home Assistant's address (the small block, else point-to-point) and remembers it in `static_address`; call it before reading `/wifi` when joining. The report adds `mode`, `gateway` and `claimed` (point-to-point only). |
 | `POST /hint` | Arrival hint: poll every 3 s for 5 minutes. Body: `{"camera": "<id>"}` or `{}` for all. |
 
 ## Clips and storage
