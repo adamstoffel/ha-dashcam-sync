@@ -241,7 +241,7 @@ function progress(s) {
 // ------------------------------------------------------------------ cameras
 
 const DRIVERS = { auto: "Detect automatically", novatek: "Novatek", viidure_app: "Viidure app (/app)", http_index: "Plain HTTP file index" };
-const CAMERA_IPS = { "192.168.1.254": "Novatek (most common)", "192.168.169.1": "Viidure app cameras" };
+const CAMERA_IPS = { "192.168.1.254": "Novatek (most common)", "192.168.169.1": "Viidure app cameras", "192.168.0.1": "Viidure / SGK (GK720X)" };
 const SCAN_REASONS = {
   integration_not_connected: "Scanning goes through Home Assistant, and the Dashcam Sync integration is not connected. Type the camera's SSID.",
   no_answer: "Home Assistant did not answer the scan. Type the camera's SSID.",

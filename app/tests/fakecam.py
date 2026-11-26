@@ -66,6 +66,8 @@ class FakeCamera:
         self.restore_calls = 0
         self.fail_restore = False
         self.range_requests: list[tuple[str, str]] = []
+        # Viidure only: behave like SGK GK720X firmware (dashcam_probe report, Nov 2026).
+        self.sgk = False
 
     # ------------------------------------------------------------- populate
 
@@ -86,8 +88,12 @@ class FakeCamera:
         return f
 
     def add_viidure(self, folder: str, name: str, size: int, time: int) -> FakeFile:
-        path = f"/mnt/mmc/DCIM/{folder}/{name}"
-        url = f"/DCIM/{folder}/{name}"
+        if self.sgk:
+            sub = {"loop": "Normal", "photo": "Photo"}[folder]
+            path = url = f"/EMMC/{sub}/F/{name}"
+        else:
+            path = f"/mnt/mmc/DCIM/{folder}/{name}"
+            url = f"/DCIM/{folder}/{name}"
         f = FakeFile(path, url, make_bytes(name, size), 0, str(time))
         f.folder = folder  # type: ignore[attr-defined]
         self.files.append(f)
@@ -266,12 +272,16 @@ class FakeCamera:
     # -------------------------------------------------------------- viidure
 
     async def _viidure(self, request: web.Request) -> web.StreamResponse:
+        if self.sgk:
+            sgk = self._sgk(request)
+            if sgk is not None:
+                return sgk
         if request.path == "/app/getproductinfo":
             return web.json_response(
                 {"result": 0, "info": {"model": "V-100", "softver": "1.0.9", "company": "viidure"}}
             )
-        if request.path == "/app/getsdinfo":
-            return web.json_response({"result": 0, "info": {"free": 5_000_000}})
+        if request.path == "/app/getsdinfo":  # MiB, like the real cameras
+            return web.json_response({"result": 0, "info": {"free": 4768, "total": 30436}})
         if request.path == "/app/playback":
             self.mode = "playback" if request.query.get("param") == "enter" else "movie"
             if self.mode == "movie":
@@ -304,6 +314,47 @@ class FakeCamera:
                 }
             )
         return web.Response(status=404)
+
+    def _sgk(self, request: web.Request) -> web.StreamResponse | None:
+        """What differs on SGK firmware; ``None`` falls through to the common answers."""
+        path, folder = request.path, request.query.get("folder", "")
+        if path == "/app/getproductinfo":
+            return web.json_response(
+                {"result": 0, "info": {"model": "DVR", "company": "SGK", "soc": "GK720X"}}
+            )
+        if path == "/app/getdeviceattr":
+            return web.json_response(
+                {"result": 0, "info": {"softver": "V7_X83_260126", "ssid": "P2DC", "camnum": 1}}
+            )
+        if path == "/app/getmediainfo":
+            return web.json_response(
+                {"result": 0, "info": {"rtsp": "rtsp://192.168.0.1/live/tcp/ch1", "port": "6035"}}
+            )
+        if path == "/app/getsdinfo":
+            return web.json_response(
+                {"result": 0, "info": {"status": 0, "free": 109450, "total": 119217}}
+            )
+        if path in ("/app/playback", "/app/setparamvalue", "/app/getrecduration"):
+            return web.Response(status=404)
+        if path == "/app/getfilelist" and folder in ("emr", "event"):
+            return web.json_response({"result": -1})
+        if path == "/app/getfilelist" and folder == "park":
+            return web.Response(status=404)
+        if path == "/app/getfilelist":
+            start = int(request.query.get("start", "0"))
+            end = int(request.query.get("end", "99"))
+            files = [f for f in self.files if getattr(f, "folder", "") == folder][start : end + 1]
+            listing = [
+                {
+                    "name": f.url.rsplit("/", 1)[-1],
+                    "path": f.path,
+                    "size": len(f.data),
+                    "createtime": int(f.time),
+                }
+                for f in files
+            ]
+            return web.json_response({"result": 0, "info": [{"folder": folder, "files": listing}]})
+        return None
 
     # ---------------------------------------------------------------- index
 

@@ -100,7 +100,7 @@ Key design points (all from the build plan):
 | Driver | Detected by | Typical default address | Confidence |
 | --- | --- | --- | --- |
 | `novatek` | `/?custom=1&cmd=3016` heartbeat answers XML | 192.168.1.254 | documented, awaiting hardware |
-| `viidure_app` | JSON from `/app/getproductinfo` | 192.168.169.1 | documented, awaiting hardware |
+| `viidure_app` | JSON from `/app/getproductinfo` | 192.168.169.1, 192.168.0.1 | probed on SGK GK720X hardware |
 | `http_index` | Any HTML directory listing with video links | any | documented, awaiting hardware |
 | `blackvue`, `ait`, `ambarella` | | | planned for 1.1 and 1.2 |
 

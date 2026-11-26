@@ -33,7 +33,7 @@ Dashcam Sync pulls video clips off a Wi-Fi dashcam into Home Assistant whenever 
 | Driver | Typical cameras | Status |
 | --- | --- | --- |
 | `novatek` | Novatek NT96xxx clones (FitcamX-style), camera at 192.168.1.254 | stable target for 1.0 |
-| `viidure_app` | Cameras using the Viidure `/app` API, camera at 192.168.169.1 | stable target for 1.0 |
+| `viidure_app` | Cameras using the Viidure `/app` API, camera at 192.168.169.1 or 192.168.0.1 (SGK GK720X firmware) | stable target for 1.0 |
 | `http_index` | Any camera that serves an HTML directory listing of video files | stable target for 1.0 |
 
 BlackVue, AIT and Ambarella families are planned for 1.1 and 1.2. Unsupported camera? Press **Capture device profile** in the Cameras page and attach the result to a GitHub issue.
