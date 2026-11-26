@@ -221,11 +221,16 @@ class DashcamSyncCoordinator(DataUpdateCoordinator[Payload]):
         elif kind == "scan_wifi":
             interface, request = message.get("interface"), message.get("request")
             if isinstance(interface, str) and isinstance(request, str) and self.scan_handler:
-                self.hass.async_create_task(self.scan_handler(interface, request))
+                # Tied to the entry: an unload cancels it instead of leaving it on a stale session.
+                self.config_entry.async_create_background_task(
+                    self.hass, self.scan_handler(interface, request), "dashcam_sync_scan"
+                )
         elif kind == "join_wifi":
             camera = message.get("camera")
             if isinstance(camera, str) and self.join_handler is not None:
-                self.hass.async_create_task(self.join_handler(camera))
+                self.config_entry.async_create_background_task(
+                    self.hass, self.join_handler(camera), f"dashcam_sync_join_{camera}"
+                )
         elif kind in (
             "overlap",
             "options",

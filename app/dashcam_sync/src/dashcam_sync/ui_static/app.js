@@ -474,7 +474,6 @@ async function wizard(existing) {
         <details id="w-adv"><summary>Advanced</summary>
           <label for="w-driver">Driver</label><select id="w-driver">${Object.entries(DRIVERS).map(([k, t]) => `<option value="${k}" ${k === st.driver ? "selected" : ""}>${t}</option>`).join("")}</select>
           ${st.connection === "hotspot" ? `
-          <label for="w-ipv4">IPv4 on the camera network</label><select id="w-ipv4"><option value="static" ${st.ipv4 !== "auto" ? "selected" : ""}>Static, small block around the camera (recommended)</option><option value="auto" ${st.ipv4 === "auto" ? "selected" : ""}>DHCP from the camera</option></select>
           <label for="w-static">Home Assistant address (CIDR)</label><input id="w-static" name="static-address" autocomplete="off" spellcheck="false" value="${esc(st.static_address)}" placeholder="computed, e.g. 192.168.1.253/30">` : ""}
           <label for="w-id">ID</label><input id="w-id" value="${esc(edit ? st.id : slug(st.name))}" disabled>
           <div class="hint">Used in folder names and entity IDs${edit ? "; it cannot change" : ""}.</div>
@@ -535,7 +534,8 @@ async function wizard(existing) {
       const body = { id: edit ? st.id : slug(st.name), name: st.name, connection: st.connection, driver: st.driver, enabled: existing ? existing.enabled : true };
       if (existing?.sync_mode) body.sync_mode = existing.sync_mode;
       if (st.host) body.host = st.host;
-      if (st.connection === "hotspot") Object.assign(body, { interface: st.interface, ssid: st.ssid, wifi_password: st.password, ipv4: st.ipv4 });
+      // Always static: a DHCP profile from the camera would also take its gateway and DNS.
+      if (st.connection === "hotspot") Object.assign(body, { interface: st.interface, ssid: st.ssid, wifi_password: st.password, ipv4: "static" });
       if (st.connection === "hotspot" && st.static_address) body.static_address = st.static_address;
       const btn = $("#w-next", box); btn.disabled = true;
       try { const r = await api("wizard/camera", { method: "POST", body }); st.id = r.camera; }
@@ -569,7 +569,7 @@ async function wizard(existing) {
     const manual = (p, why) => `<div class="card notice" style="margin:12px 0 0"><b>Join the camera's Wi-Fi in Home Assistant</b>${why ? `<div class="muted">${why}</div>` : ""}
       <p>Open <a href="/config/network" target="_top">Settings › System › Network</a>, choose <b>${esc(p.interface)}</b>, then:</p>
       <table class="kv">${[["Wi-Fi mode", "Infrastructure"], ["SSID", p.ssid], ["Security", "WPA-PSK, with the camera password you entered"],
-        ["IPv4", p.ipv4 === "auto" ? "Automatic (DHCP)" : `Static · ${p.address || "?"}`], ["Gateway", "none"], ["DNS servers", "none"], ["IPv6", "Disabled"]]
+        ["IPv4", `Static · ${p.address || "?"}`], ["Gateway", "none"], ["DNS servers", "none"], ["IPv6", "Disabled"]]
         .map(([k, v]) => `<tr><td>${k}</td><td><code>${esc(v)}</code></td><td>${["SSID", "IPv4"].includes(k) && v ? `<button class="text copy" data-v="${esc(k === "IPv4" ? p.address || "" : v)}">Copy</button>` : ""}</td></tr>`).join("")}</table>
       <div class="hint">No gateway and no DNS keep your default route and name resolution on Ethernet.</div></div>`;
     const started = Date.now();

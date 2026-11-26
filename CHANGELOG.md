@@ -4,6 +4,7 @@ All notable changes to the integration and the app. Both are released together w
 
 ## Unreleased
 
+- The camera wizard no longer offers DHCP addressing for hotspot cameras: the join always writes a static address, so the camera's gateway and DNS never replace your own. Joins for one camera no longer overlap, and unloading the integration stops a running join or scan.
 - Fixed: on a real Home Assistant, edits from the panel (adding a camera, Settings, pausing, the storage location) only took effect after an app restart; the wizard then answered "unknown camera". The Supervisor stores saved options but only writes `/data/options.json` when the app starts, so the app now writes that file itself after the Supervisor accepts the options, and picks up Configuration-tab edits within about 15 seconds. The fake Supervisor in the tests now behaves the same way, so this is covered.
 - Wizard: **Scan** asks Home Assistant to scan (this app's role may not), and lists networks with signal strength; the hotspot step asks for the camera's IP (Novatek 192.168.1.254 or Viidure 192.168.169.1 offered, or any other), since Home Assistant's address on the camera network is chosen next to it; the Connect step shows the interface's state and, after 90 s without an answer, what to check. An idle interface reads "not configured · free" instead of "disabled", and notices that are not errors are no longer shown as errors.
 - A panel edit made right after a Configuration-tab edit no longer overwrites it; a save the Supervisor refuses is reported as such, naming the field.

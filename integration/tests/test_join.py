@@ -17,9 +17,19 @@ W = "custom_components.dashcam_sync.wifi"
 ADAPTER = [WifiInterface("wlan0", connected=False, enabled=True, ssid=None)]
 
 
+async def settle(hass: HomeAssistant, rounds: int = 50) -> None:
+    """Let entry background tasks (joins, scans) run; the WebSocket loop never ends, so
+    ``wait_background_tasks`` cannot be used."""
+    import asyncio
+
+    for _ in range(rounds):
+        await hass.async_block_till_done()
+        await asyncio.sleep(0.01)
+
+
 async def join(hass: HomeAssistant, fake_api: FakeApi) -> tuple:
     fake_api.push({"type": "join_wifi", "camera": "polestar_2"})
-    await hass.async_block_till_done()
+    await settle(hass)
     results = fake_api.calls_named("join_result")
     assert len(results) == 1
     return results[0]
@@ -88,7 +98,7 @@ async def test_a_join_request_for_a_bad_camera_value_is_ignored(
     hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
 ) -> None:
     fake_api.push({"type": "join_wifi", "camera": None})
-    await hass.async_block_till_done()
+    await settle(hass)
     assert fake_api.calls_named("join_result") == []
 
 
@@ -104,7 +114,7 @@ async def test_a_scan_request_is_answered_with_what_home_assistant_sees(
     client = SimpleNamespace(network=SimpleNamespace(access_points=AsyncMock(return_value=aps)))
     with patch(f"{W}._client", return_value=client):
         fake_api.push({"type": "scan_wifi", "interface": "wlp4s0", "request": "r1"})
-        await hass.async_block_till_done()
+        await settle(hass)
     client.network.access_points.assert_awaited_once_with("wlp4s0")
     [(request, found, error)] = fake_api.calls_named("scan_result")
     assert request == "r1" and error is None
@@ -116,7 +126,7 @@ async def test_a_failed_scan_is_reported_not_swallowed(
 ) -> None:
     with patch(f"{W}._client", side_effect=WifiUnavailable("no Supervisor client")):
         fake_api.push({"type": "scan_wifi", "interface": "wlp4s0", "request": "r2"})
-        await hass.async_block_till_done()
+        await settle(hass)
     [(request, found, error)] = fake_api.calls_named("scan_result")
     assert request == "r2" and found == [] and "no Supervisor client" in error
 
@@ -126,5 +136,53 @@ async def test_scan_requests_with_bad_values_are_ignored(
 ) -> None:
     fake_api.push({"type": "scan_wifi", "interface": 7, "request": "r3"})
     fake_api.push({"type": "scan_wifi", "interface": "wlp4s0"})
-    await hass.async_block_till_done()
+    await settle(hass)
     assert fake_api.calls_named("scan_result") == []
+
+
+async def test_joins_for_one_camera_never_overlap(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
+) -> None:
+    import asyncio
+
+    running = 0
+    peak = 0
+
+    async def slow_apply(*_args: object) -> None:
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.05)
+        running -= 1
+
+    with (
+        patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
+        patch(f"{W}.async_apply_profile", side_effect=slow_apply),
+    ):
+        fake_api.push({"type": "join_wifi", "camera": "polestar_2"})
+        fake_api.push({"type": "join_wifi", "camera": "polestar_2"})
+        await settle(hass)
+    assert peak == 1
+    assert len(fake_api.calls_named("join_result")) == 2
+
+
+async def test_unloading_cancels_a_running_join(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
+) -> None:
+    import asyncio
+
+    started = asyncio.Event()
+
+    async def hang(*_args: object) -> None:
+        started.set()
+        await asyncio.sleep(3600)
+
+    with (
+        patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
+        patch(f"{W}.async_apply_profile", side_effect=hang),
+    ):
+        fake_api.push({"type": "join_wifi", "camera": "polestar_2"})
+        await asyncio.wait_for(started.wait(), 5)
+        assert await hass.config_entries.async_unload(loaded.entry_id)
+        await settle(hass)
+    assert fake_api.calls_named("join_result") == []

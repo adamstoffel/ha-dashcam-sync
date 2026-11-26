@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -130,14 +131,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry) 
 
     coordinator.unsafe_handler = _disconnect_unsafe
 
+    join_locks: dict[str, asyncio.Lock] = {}
+
     async def _join(camera_id: str) -> None:
-        """The panel asked to join a hotspot camera: do it and report back."""
-        state, reason = await async_join_camera(hass, api, camera_id)
-        _LOGGER.info("Joining the Wi-Fi for %s: %s %s", camera_id, state, reason or "")
-        try:
-            await api.async_join_result(camera_id, state, reason)
-        except Exception as err:  # the panel times out and shows the manual steps
-            _LOGGER.warning("Could not report the Wi-Fi join for %s: %s", camera_id, err)
+        """The panel asked to join a hotspot camera: do it and report back.
+
+        One join per camera at a time: a retry while a join is still running must not
+        write the interface twice.
+        """
+        async with join_locks.setdefault(camera_id, asyncio.Lock()):
+            state, reason = await async_join_camera(hass, api, camera_id)
+            _LOGGER.info("Joining the Wi-Fi for %s: %s %s", camera_id, state, reason or "")
+            try:
+                await api.async_join_result(camera_id, state, reason)
+            except Exception as err:  # the panel times out and shows the manual steps
+                _LOGGER.warning("Could not report the Wi-Fi join for %s: %s", camera_id, err)
 
     coordinator.join_handler = _join
 
