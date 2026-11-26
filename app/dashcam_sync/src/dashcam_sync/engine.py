@@ -491,7 +491,8 @@ class CameraWorker:
             except ProtocolError as err:
                 stats.result, stats.error = "list_failed", str(err)
                 raise
-            self._drop_vanished_partials(recs)
+            if driver.listing_complete:
+                self._drop_vanished_partials(recs)
             await self._download_all(driver, recs, stats)
         except UnsupportedCamera as err:
             stats.result, stats.error = "unsupported", str(err)
@@ -624,8 +625,9 @@ class CameraWorker:
         A loop-recording camera overwrites its oldest files, so a clip interrupted
         on an earlier visit can be gone by the next one. Nothing can ever finish it,
         yet the catalogue keeps referencing its partial file, so it would sit on the
-        disk for good. An empty listing is not trusted: that is more likely a glitch
-        than a camera with nothing on it.
+        disk for good. Only a complete listing proves a file is gone (the caller checks
+        ``driver.listing_complete``), and an empty one is not trusted either: that is
+        more likely a glitch than a camera with nothing on it.
         """
         if not recs:
             return

@@ -130,6 +130,7 @@ class ViidureDriver(BaseDriver):
     async def list_recordings(self) -> list[Recording]:
         recs: list[Recording] = []
         seen: set[str] = set()
+        self.listing_complete = True
         for folder in FOLDERS:
             try:
                 # Firmware without a folder may answer with another folder's files:
@@ -142,6 +143,9 @@ class ViidureDriver(BaseDriver):
                 if folder == REQUIRED_FOLDER:
                     raise
                 # Not every camera has every folder; a dropped link (LinkLost) still stops.
+                # A 404 means there is no such folder; anything else hid what is in it.
+                if ": HTTP 404" not in str(err):
+                    self.listing_complete = False
                 _LOGGER.debug("Skipping the %s folder: %s", folder, err)
         if self._still_recording:
             recs = _without_clip_being_recorded(recs)
@@ -161,6 +165,8 @@ class ViidureDriver(BaseDriver):
                     out.append(rec)
             if len(files) < PAGE:
                 break
+        else:
+            self.listing_complete = False  # more pages than we read
         return out
 
     def _parse(self, folder: str, item: Any) -> Recording | None:

@@ -68,6 +68,7 @@ class FakeCamera:
         self.range_requests: list[tuple[str, str]] = []
         # Viidure only: behave like SGK GK720X firmware (dashcam_probe report, Nov 2026).
         self.sgk = False
+        self.park_status = 404  # SGK: no parking folder; 500 = a folder that failed
 
     # ------------------------------------------------------------- populate
 
@@ -341,7 +342,7 @@ class FakeCamera:
         if path == "/app/getfilelist" and folder == "emr":
             folder = "photo"  # the real camera answers a folder it lacks with the photos
         if path == "/app/getfilelist" and folder == "park":
-            return web.Response(status=404)
+            return web.Response(status=self.park_status)
         if path == "/app/getfilelist":
             start = int(request.query.get("start", "0"))
             end = int(request.query.get("end", "99"))

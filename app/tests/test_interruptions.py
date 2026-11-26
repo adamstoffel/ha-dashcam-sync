@@ -610,3 +610,39 @@ async def test_an_empty_listing_does_not_discard_partials(env: Env) -> None:
     env.cam.files = []
     await env.session()
     assert part.exists()
+
+
+async def test_partials_survive_a_listing_with_a_folder_that_failed(
+    tmp_path: Path, session: aiohttp.ClientSession
+) -> None:
+    """Missing from an incomplete listing proves nothing: the resumable bytes stay."""
+    env, cam = await _sgk_env(tmp_path, session)
+    try:
+        cam.faults.drop_after = 120_000
+        await env.session()
+        cam.faults.drop_after = None
+        [row] = [c for c in env.catalog.unfinished("car") if c.offset]
+        part = Path(row.part_path or "")
+        assert part.exists()
+
+        cam.park_status = 500  # the parking folder fails: the listing is incomplete
+        hidden = cam.files[0]
+        cam.files = [f for f in cam.files if f is not hidden]
+        # The camera moved on: a newer clip is being recorded, so the listing is not empty.
+        cam.add_viidure("loop", "20261126114106.ts", 80_000, 1_795_000_100)
+        await env.session()
+        assert part.exists()  # kept: it may be in the folder that failed
+
+        cam.park_status = 404  # no such folder: the listing is complete again
+        await env.session()
+        assert not part.exists()  # really gone from the card: dropped
+    finally:
+        await _close(env, cam)
+
+
+def test_drivers_report_whether_their_listing_is_complete() -> None:
+    from dashcam_sync.drivers import DRIVERS
+    from dashcam_sync.drivers.http import CameraHttp
+
+    for cls in DRIVERS:
+        assert cls(CameraHttp(None)).listing_complete is True  # type: ignore[arg-type]
