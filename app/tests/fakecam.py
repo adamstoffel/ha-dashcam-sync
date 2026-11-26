@@ -348,7 +348,8 @@ class FakeCamera:
                 {
                     "name": f.url.rsplit("/", 1)[-1],
                     "path": f.path,
-                    "size": len(f.data),
+                    # Like the real camera: kB for videos, an unrelated number for photos.
+                    "size": 73400 if f.path.endswith(".jpg") else len(f.data) // 1000,
                     "createtime": int(f.time),
                 }
                 for f in files

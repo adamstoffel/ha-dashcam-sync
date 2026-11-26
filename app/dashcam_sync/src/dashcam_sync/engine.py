@@ -24,7 +24,7 @@ import aiohttp
 from .catalog import TARGET_LOCAL, Catalog, ClipRow
 from .detect import Detection, candidate_hosts, detect
 from .drivers import DRIVER_BY_NAME, BaseDriver
-from .drivers.http import CameraHttp
+from .drivers.http import ByteStream, CameraHttp
 from .errors import (
     CameraError,
     Incomplete,
@@ -215,6 +215,7 @@ class CameraWorker:
         self._need_relink = False
         self._synced_this_link = False
         self._remaining_base = 0
+        self._estimates: dict[int, int] = {}
         self.status.restore_pending = ctx.flags.get(camera.id) is not None
         self._restore_persisted_state()
 
@@ -562,7 +563,8 @@ class CameraWorker:
             row, _ = catalog.upsert_recording(self.camera.id, rec)
             pending.append((rec, row))
 
-        self._remaining_base = sum(r.size for r, _ in pending)
+        self._remaining_base = sum(r.size_estimate for r, _ in pending)
+        self._estimates = {row.id: r.size_estimate for r, row in pending}
         self.status.clips_remaining = len(pending)
         self.status.bytes_remaining = self._remaining_base
         self.status.eta_seconds = None
@@ -583,14 +585,18 @@ class CameraWorker:
                 catalog.mark_failed(row.id, str(err))
                 stats.failures += 1
                 failures_in_row += 1
-                self._remaining_base = max(0, self._remaining_base - rec.size)
+                self._remaining_base = max(
+                    0, self._remaining_base - self._estimates.pop(row.id, rec.size_estimate)
+                )
                 self.status.clips_remaining = max(0, self.status.clips_remaining - 1)
                 if failures_in_row >= MAX_CONSECUTIVE_FILE_FAILURES:
                     stats.result, stats.error = "error", str(err)
                     raise CameraError(str(err)) from err
                 continue
             failures_in_row = 0
-            self._remaining_base = max(0, self._remaining_base - rec.size)
+            self._remaining_base = max(
+                0, self._remaining_base - self._estimates.pop(row.id, rec.size_estimate)
+            )
             self.status.clips_remaining = max(0, self.status.clips_remaining - 1)
             self.status.bytes_remaining = self._remaining_base
             self._update_eta()
@@ -598,6 +604,17 @@ class CameraWorker:
         if stats.failures and stats.result == "ok":
             stats.result = "partial"
             stats.error = f"{stats.failures} clip(s) failed"
+
+    def _learn_size(self, clip_id: int, stream: ByteStream) -> None:
+        """Replace a clip's estimated size by what the download says, for progress."""
+        actual = stream.total
+        if actual is None and stream.content_length is not None:
+            actual = stream.start + stream.content_length
+        estimate = self._estimates.get(clip_id)
+        if actual is None or estimate is None or actual == estimate:
+            return
+        self._remaining_base = max(0, self._remaining_base + actual - estimate)
+        self._estimates[clip_id] = actual
 
     def _update_eta(self) -> None:
         speed = self.status.speed_bps
@@ -608,7 +625,7 @@ class CameraWorker:
     ) -> None:
         storage = self.ctx.storage()
         catalog = self.ctx.catalog
-        dest = await asyncio.to_thread(storage.primary_destination, rec.size)
+        dest = await asyncio.to_thread(storage.primary_destination, rec.size_estimate)
         adopted = self._adopt_placed(rec, row, dest)
         if adopted is not None:
             digest = await asyncio.to_thread(_sha256, adopted)
@@ -618,9 +635,10 @@ class CameraWorker:
         part.parent.mkdir(parents=True, exist_ok=True)
 
         offset = min(row.offset, part.stat().st_size) if part.exists() else 0
-        if offset > rec.size:
+        if rec.size and offset > rec.size:
             offset = 0
         stream = await driver.open(rec, offset)
+        self._learn_size(row.id, stream)
         try:
             if stream.start != offset:
                 # The camera ignored Range and answered 200: start over.

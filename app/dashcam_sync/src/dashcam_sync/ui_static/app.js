@@ -235,7 +235,12 @@ function statusBadge(s, enabled = true) {
 function progress(s) {
   if (!s || !s.clips_remaining || s.sync_status !== "downloading") return "";
   return `<div class="progress"><div class="bar"><div style="width:0%"></div></div>
-    <div class="small muted">${s.clips_remaining} clips, ${bytes(s.bytes_remaining)} left · ${bytes(s.speed_bps)}/s · about ${eta(s.eta_seconds)}</div></div>`;
+    <div class="small muted">${[
+      `${s.clips_remaining} ${s.clips_remaining === 1 ? "clip" : "clips"} left`,
+      s.bytes_remaining > 0 ? bytes(s.bytes_remaining) : null,
+      s.speed_bps > 0 ? `${bytes(s.speed_bps)}/s` : null,
+      s.eta_seconds > 0 ? `about ${eta(s.eta_seconds)}` : null,
+    ].filter(Boolean).join(" · ")}</div></div>`;
 }
 
 // ------------------------------------------------------------------ cameras

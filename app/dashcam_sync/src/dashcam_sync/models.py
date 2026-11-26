@@ -58,6 +58,14 @@ class Recording:
     channel: Channel = Channel.FRONT
     locked: bool = False
     duration: int | None = None
+    # A size the listing suggests but that cannot be trusted for verification
+    # (some firmware lists kilobytes, or a different file's size). Progress and
+    # space estimates only; ``size`` stays 0 so the download's own headers decide.
+    approx_size: int = 0
+
+    @property
+    def size_estimate(self) -> int:
+        return self.size or self.approx_size
 
     @property
     def extension(self) -> str:

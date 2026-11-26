@@ -303,3 +303,66 @@ def test_shipping_reuses_a_copy_finished_before_a_crash(tmp_path: Path, catalog:
     assert mgr.ship_pending() == 1
     assert catalog.copy(row.id, TARGET_NETWORK).path == str(already)  # type: ignore[union-attr]
     assert not list(nas.rglob("*_2.*"))
+
+
+# ------------------------------------------------- listing sizes that are wrong
+
+
+async def test_sgk_camera_whose_listing_sizes_are_wrong(
+    tmp_path: Path, session: aiohttp.ClientSession
+) -> None:
+    """The real SGK camera lists kilobytes for videos and a wrong size for photos.
+
+    Clips must still download, verified by the download's own headers, and resume
+    from where a dropped link left them instead of starting over.
+    """
+    cam = FakeCamera("viidure")
+    cam.sgk = True
+    await cam.start()
+    env = make_env(tmp_path, session, cam)
+    try:
+        cam.add_viidure("loop", "20261126113926.ts", 300_000, 1_795_000_000)
+        cam.add_viidure("loop", "20261126114016.ts", 250_000, 1_795_000_050)
+        cam.add_viidure("loop", "20261126114106.ts", 90_000, 1_795_000_100)  # being recorded
+        cam.add_viidure("photo", "20261125182315.jpg", 325_210, 1_795_000_200)
+        cam.faults.drop_after = 120_000
+        first = await env.session()
+        assert first.result == "link_lost" and recorded(env) < 3
+        offsets = [c.offset for c in env.catalog.unfinished("car") if c.offset]
+        assert offsets and all(o >= 65_536 for o in offsets)  # kept, not reset to 0
+
+        cam.faults.drop_after = None
+        cam.range_requests.clear()
+        await env.session()
+        clips = env.catalog.list_clips(camera="car")
+        assert len(clips) == 3  # the clip still being recorded waits for next time
+        assert any(r not in ("", "bytes=0-") for _, r in cam.range_requests)  # resumed
+        for clip in clips:
+            copy = env.catalog.copy(clip.id, TARGET_LOCAL)
+            assert copy is not None
+            original = next(f for f in cam.files if len(f.data) == clip.size)
+            assert Path(copy.path).read_bytes() == original.data
+        assert sorted(c.size for c in clips) == [250_000, 300_000, 325_210]  # real sizes
+        again = await env.session()
+        assert again.clips == 0 and again.bytes == 0  # nothing is fetched twice
+    finally:
+        await env.post.stop()
+        env.catalog.close()
+        await cam.stop()
+
+
+def test_progress_uses_the_estimate_then_the_real_size(
+    tmp_path: Path, session: aiohttp.ClientSession
+) -> None:
+    from types import SimpleNamespace
+
+    env = make_env(tmp_path, session, FakeCamera("viidure"))
+    worker = env.worker
+    worker._estimates = {1: 60_215_000}
+    worker._remaining_base = 60_215_000
+    stream = SimpleNamespace(total=60_215_648, start=0, content_length=60_215_648)
+    worker._learn_size(1, stream)  # type: ignore[arg-type]
+    assert worker._remaining_base == 60_215_648 and worker._estimates[1] == 60_215_648
+    worker._learn_size(2, stream)  # type: ignore[arg-type]  # unknown clip: no change
+    assert worker._remaining_base == 60_215_648
+    env.catalog.close()

@@ -196,13 +196,29 @@ class Catalog:
 
     # ------------------------------------------------------------------ clips
 
+    @staticmethod
+    def _identity(camera: str, rec: Recording) -> tuple[str, tuple[object, ...]]:
+        """How a listed recording is matched to its row.
+
+        Path, size and start time; when the listing gives no trustworthy size (0),
+        path and start time, preferring a finished row (its size is then the real one).
+        """
+        if rec.size:
+            return (
+                "camera=? AND src_path=? AND size=? AND start_ts=?",
+                (camera, rec.path, rec.size, rec.start.timestamp()),
+            )
+        return (
+            "camera=? AND src_path=? AND start_ts=? ORDER BY"
+            " status IN ('done', 'deleted') DESC, id DESC LIMIT 1",
+            (camera, rec.path, rec.start.timestamp()),
+        )
+
     def upsert_recording(self, camera: str, rec: Recording) -> tuple[ClipRow, bool]:
         """Insert a listed recording; returns the row and whether it was new."""
+        where, args = self._identity(camera, rec)
         with self._tx() as conn:
-            row = conn.execute(
-                "SELECT * FROM clips WHERE camera=? AND src_path=? AND size=? AND start_ts=?",
-                (camera, rec.path, rec.size, rec.start.timestamp()),
-            ).fetchone()
+            row = conn.execute(f"SELECT * FROM clips WHERE {where}", args).fetchone()
             if row is not None:
                 return _clip(row), False
             cur = conn.execute(
@@ -229,11 +245,9 @@ class Catalog:
         Deleting a clip keeps its row so the camera's copy, still on the card, is
         never fetched again.
         """
+        where, args = self._identity(camera, rec)
         with self._lock:
-            row = self._conn.execute(
-                "SELECT status FROM clips WHERE camera=? AND src_path=? AND size=? AND start_ts=?",
-                (camera, rec.path, rec.size, rec.start.timestamp()),
-            ).fetchone()
+            row = self._conn.execute(f"SELECT status FROM clips WHERE {where}", args).fetchone()
         return row is not None and row["status"] in ("done", "deleted")
 
     def get_clip(self, clip_id: int) -> ClipRow | None:
@@ -279,10 +293,12 @@ class Catalog:
         now = time.time()
         with self._tx() as conn:
             conn.execute(
-                "UPDATE clips SET status='done', sha256=?, offset=size, part_path=NULL,"
-                " done_ts=?, error=NULL WHERE id=?",
-                (sha256, now, clip_id),
+                # A clip listed without a trustworthy size gets its verified size here.
+                "UPDATE clips SET size=CASE WHEN size=0 THEN ? ELSE size END, status='done',"
+                " sha256=?, part_path=NULL, done_ts=?, error=NULL WHERE id=?",
+                (size, sha256, now, clip_id),
             )
+            conn.execute("UPDATE clips SET offset=size WHERE id=?", (clip_id,))
             conn.execute(
                 "INSERT OR REPLACE INTO copies (clip_id, target, path, size, state, created_ts)"
                 " VALUES (?,?,?,?,?,?)",

@@ -176,9 +176,13 @@ class ViidureDriver(BaseDriver):
         if kind is Kind.EVENT:
             locked = True
         start = _parse_start(item.get("time", item.get("createtime")), path)
+        # The listed size is not trustworthy for verification: SGK firmware lists
+        # kilobytes for videos and an unrelated number for photos. It is kept as an
+        # estimate; the download's Content-Length and Content-Range decide.
         return Recording(
-            path=path, size=size, start=start, kind=kind, channel=channel, locked=locked
-        )
+            path=path, size=0, start=start, kind=kind, channel=channel, locked=locked,
+            approx_size=_approx_bytes(size, kind),
+        )  # fmt: skip
 
     @staticmethod
     def url_path(rec: Recording) -> str:
@@ -215,6 +219,15 @@ def _without_clip_being_recorded(recs: list[Recording]) -> list[Recording]:
         return recs
     newest = max(r.start for r in loop)
     return [r for r in recs if not (r.kind is Kind.NORMAL and r.start == newest)]
+
+
+def _approx_bytes(listed: int, kind: Kind) -> int:
+    """Best guess of a listed size in bytes: a video listed below 10 MB is in kB."""
+    if listed <= 0:
+        return 0
+    if kind is not Kind.PHOTO and listed < 10_000_000:
+        return listed * 1000
+    return listed
 
 
 def _rtsp_path(raw: Any) -> str | None:
