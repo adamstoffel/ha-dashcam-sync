@@ -229,11 +229,23 @@ def test_install_on_ha_copies_both_parts_and_bumps_the_version(tmp_path: Path) -
     assert run.returncode == 0, run.stderr
     cfg = (apps / "dashcam_sync" / "config.yaml").read_text()
     assert "\nimage:" not in cfg
-    version = re.search(r'^version: "(\d{4})\.(\d+)\.(\d{10})"$', cfg, re.MULTILINE)
+    version = re.search(r'^version: "(\d{4})\.(\d+)\.(\d{12})"$', cfg, re.MULTILINE)
     assert version, cfg[:300]
     assert (config / "custom_components" / "dashcam_sync" / "manifest.json").exists()
     assert "Check for updates" in run.stdout  # no `ha` command here: the manual steps
     assert os.access(SCRIPTS / "install-on-ha.sh", os.X_OK)
+
+    # A second install right away (same second) must still count as newer, or the
+    # Supervisor would not rebuild the changed source.
+    again = subprocess.run(
+        ["sh", str(SCRIPTS / "install-on-ha.sh"), "some-branch"],
+        env=env, capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert again.returncode == 0, again.stderr
+    cfg2 = (apps / "dashcam_sync" / "config.yaml").read_text()
+    version2 = re.search(r'^version: "\d{4}\.\d+\.(\d{12})"$', cfg2, re.MULTILINE)
+    assert version2 and int(version2[1]) > int(version[3])
+    assert not list(apps.glob(".dashcam_sync.*"))  # no staging or backup left behind
 
 
 def test_ha_api_check_does_not_count_names_inside_functions_or_classes(
