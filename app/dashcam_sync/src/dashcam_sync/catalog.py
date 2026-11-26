@@ -200,8 +200,9 @@ class Catalog:
     def _identity(camera: str, rec: Recording) -> tuple[str, tuple[object, ...]]:
         """How a listed recording is matched to its row.
 
-        Path, size and start time; when the listing gives no trustworthy size (0),
-        path and start time, preferring a finished row (its size is then the real one).
+        Path, size and start time. When the listing gives no trustworthy size (0),
+        the path alone (these cameras put the time in every file name), preferring a
+        finished row: a corrected size or start time must not make a clip look new.
         """
         if rec.size:
             return (
@@ -209,9 +210,8 @@ class Catalog:
                 (camera, rec.path, rec.size, rec.start.timestamp()),
             )
         return (
-            "camera=? AND src_path=? AND start_ts=? ORDER BY"
-            " status IN ('done', 'deleted') DESC, id DESC LIMIT 1",
-            (camera, rec.path, rec.start.timestamp()),
+            "camera=? AND src_path=? ORDER BY status IN ('done', 'deleted') DESC, id DESC LIMIT 1",
+            (camera, rec.path),
         )
 
     def upsert_recording(self, camera: str, rec: Recording) -> tuple[ClipRow, bool]:
@@ -250,15 +250,24 @@ class Catalog:
             row = self._conn.execute(f"SELECT status FROM clips WHERE {where}", args).fetchone()
         return row is not None and row["status"] in ("done", "deleted")
 
-    def refresh_kind(self, camera: str, rec: Recording) -> None:
-        """Correct the type of an already downloaded clip when the driver now knows better."""
+    def refresh_listing(self, camera: str, rec: Recording) -> None:
+        """Correct an already downloaded clip's type and start time when the driver
+        now reads them better (only for listings matched by path)."""
         where, args = self._identity(camera, rec)
         with self._tx() as conn:
-            row = conn.execute(f"SELECT id, kind FROM clips WHERE {where}", args).fetchone()
-            if row is not None and row["kind"] != rec.kind.value:
+            row = conn.execute(
+                f"SELECT id, kind, start_ts FROM clips WHERE {where}", args
+            ).fetchone()
+            if row is None:
+                return
+            if row["kind"] != rec.kind.value:
                 conn.execute(
                     "UPDATE clips SET kind=?, locked=? WHERE id=?",
                     (rec.kind.value, int(rec.locked), row["id"]),
+                )
+            if not rec.size and abs(row["start_ts"] - rec.start.timestamp()) >= 1:
+                conn.execute(
+                    "UPDATE clips SET start_ts=? WHERE id=?", (rec.start.timestamp(), row["id"])
                 )
 
     def get_clip(self, clip_id: int) -> ClipRow | None:

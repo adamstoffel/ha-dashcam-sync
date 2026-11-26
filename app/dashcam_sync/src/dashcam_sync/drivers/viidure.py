@@ -293,6 +293,16 @@ def _extract_files(data: Any) -> list[Any]:
 
 
 def _parse_start(raw: Any, path: str) -> dt.datetime:
+    """When the clip started, as UTC.
+
+    The file name first: it is the camera's wall-clock time, the same as the stamp
+    burned into the video. The listing's ``time``/``createtime`` is only a fallback:
+    SGK firmware turns its local clock into an epoch as if it were UTC+8, which puts
+    every clip hours off.
+    """
+    from_name = timestamp_from_name(path)
+    if from_name is not None:
+        return from_name
     if isinstance(raw, (int, float)) and raw > 0:
         return utc(float(raw))
     if isinstance(raw, str):
@@ -303,7 +313,7 @@ def _parse_start(raw: Any, path: str) -> dt.datetime:
                 return naive_local_to_utc(dt.datetime.strptime(raw, fmt))
             except ValueError:
                 continue
-    return timestamp_from_name(path) or EPOCH
+    return EPOCH
 
 
 # Re-exported so tests can reference the mapping.

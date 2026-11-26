@@ -559,7 +559,7 @@ class CameraWorker:
         pending: list[tuple[Recording, ClipRow]] = []
         for rec in build_queue(recs, mode, sync.recent_minutes):
             if catalog.is_known_done(self.camera.id, rec):
-                catalog.refresh_kind(self.camera.id, rec)
+                catalog.refresh_listing(self.camera.id, rec)
                 continue
             row, _ = catalog.upsert_recording(self.camera.id, rec)
             pending.append((rec, row))

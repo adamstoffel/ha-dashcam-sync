@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as dt
+
 import aiohttp
 import pytest
 import pytest_asyncio
@@ -226,6 +228,10 @@ async def test_viidure_sgk_firmware(session: aiohttp.ClientSession) -> None:
         assert [r.kind for r in recs if r.path.endswith(".jpg")] == [Kind.PHOTO]
         rec = next(r for r in recs if r.kind is Kind.NORMAL)
         assert rec.path == "/EMMC/Normal/F/20261126105248.ts"
+        # The file name's wall-clock time wins over the camera's wrong epoch.
+        from dashcam_sync.models import naive_local_to_utc
+
+        assert rec.start == naive_local_to_utc(dt.datetime(2026, 11, 26, 10, 52, 48))
         assert drv.url_path(rec) == "/EMMC/Normal/F/20261126105248.ts"
         assert await read_all(await drv.open(rec, 0)) == make_bytes("20261126105248.ts", 6000)
         await drv.restore()

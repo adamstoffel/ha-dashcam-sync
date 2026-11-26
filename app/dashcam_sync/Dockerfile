@@ -12,7 +12,8 @@ ENV LANG=C.UTF-8 \
     DASHCAM_SHARE=/share
 
 # ffmpeg remuxes clips and makes thumbnails; iputils-ping backs the overlap probe.
-RUN apk add --no-cache ffmpeg iputils-ping
+# tzdata: file names carry the camera's wall-clock time, read in Home Assistant's zone (TZ).
+RUN apk add --no-cache ffmpeg iputils-ping tzdata
 
 COPY requirements.txt /tmp/requirements.txt
 RUN python3 -m venv /opt/venv \
