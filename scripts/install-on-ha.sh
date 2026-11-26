@@ -22,8 +22,17 @@ config="${DASHCAM_CONFIG_DIR:-}"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-echo "Downloading $REF ..."
-wget -qO- "$REPO/archive/$REF.tar.gz" | tar xz -C "$tmp" --strip-components=1
+# Resolve a branch or tag to its commit first: GitHub can serve a cached archive of a
+# branch for minutes after a push, while an archive of a commit never changes.
+sha="$(wget -qO- "https://api.github.com/repos/adamstoffel/ha-dashcam-sync/commits/$REF" 2>/dev/null \
+  | sed -n 's/^  "sha": "\([0-9a-f]\{40\}\)".*/\1/p' | head -n 1)" || sha=""
+if [ -n "$sha" ]; then
+  echo "Downloading $REF at commit $(echo "$sha" | cut -c1-7) ..."
+  wget -qO- "$REPO/archive/$sha.tar.gz" | tar xz -C "$tmp" --strip-components=1
+else
+  echo "Downloading $REF (could not look up its commit; the archive may lag a recent push) ..."
+  wget -qO- "$REPO/archive/$REF.tar.gz" | tar xz -C "$tmp" --strip-components=1
+fi
 
 rm -rf "$apps/dashcam_sync" "$config/custom_components/dashcam_sync"
 cp -r "$tmp/app/dashcam_sync" "$apps/dashcam_sync"
@@ -36,7 +45,7 @@ cfg="$apps/dashcam_sync/config.yaml"
 base="$(sed -n 's/^version: "\{0,1\}\([0-9]*\.[0-9]*\)\..*/\1/p' "$cfg")"
 sed -i '/^image:/d' "$cfg"
 sed -i "s/^version: .*/version: \"$base.$(date +%y%m%d%H%M)\"/" "$cfg"
-echo "Installed $(grep '^version' "$cfg") from $REF"
+echo "Installed $(grep '^version' "$cfg") from $REF${sha:+ ($(echo "$sha" | cut -c1-7))}"
 
 if command -v ha >/dev/null 2>&1; then
   ha store reload >/dev/null

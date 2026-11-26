@@ -133,7 +133,7 @@ async def info(request: web.Request) -> web.Response:
     return web.json_response(
         {
             "api_version": API_VERSION,
-            "app_version": __version__,
+            "app_version": d.installed_version,
             "name": "Dashcam Sync",
             "instance": d.instance_id,
             "cameras": len(d.workers),

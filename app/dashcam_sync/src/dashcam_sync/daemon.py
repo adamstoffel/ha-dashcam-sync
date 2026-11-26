@@ -131,6 +131,7 @@ class Daemon:
         self.flags: RestoreFlags | None = None
         self.network = NetworkMonitor(None)
         self.supervisor: SupervisorClient | None = None
+        self.installed_version: str = __version__
         self.store: OptionsStore | None = None
         self.known_device_ips: list[str] = []
         self.overlap: dict[str, OverlapReport] = {}
@@ -341,6 +342,11 @@ class Daemon:
         try:
             data = await self.supervisor._request("GET", "/addons/self/info")
             host = (data or {}).get("hostname") or host
+            # The installed version (a local build carries a timestamp): shown in the
+            # panel so it is plain which build is running.
+            installed = (data or {}).get("version")
+            if isinstance(installed, str) and installed:
+                self.installed_version = installed
         except SupervisorError:
             pass
         try:
@@ -945,7 +951,7 @@ class Daemon:
     def status_payload(self) -> dict[str, Any]:
         return {
             "api_version": API_VERSION,
-            "app_version": __version__,
+            "app_version": self.installed_version,
             "uptime": round(time.time() - self._started),
             "cameras": {cid: w.status.as_dict() for cid, w in self.workers.items()},
             "storage": self.storage_payload(),
