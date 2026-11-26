@@ -218,3 +218,28 @@ async def test_the_report_says_how_each_address_answered() -> None:
     assert fixed.as_dict()["evidence"] == {
         "192.168.0.2": "refused a connection on port 443 (no ping answer)"
     }
+
+
+async def test_choosing_probes_each_address_once_and_in_parallel() -> None:
+    """Several taken candidates must still answer well within the integration's timeout."""
+    import asyncio
+    import time
+    from collections import Counter
+
+    from dashcam_sync.netblock import choose_block
+
+    calls: Counter[str] = Counter()
+    taken = {"192.168.0.2", "192.168.0.254", "192.168.0.253", "192.168.0.252"}
+
+    async def slow_probe(ip: str) -> bool:
+        calls[ip] += 1
+        await asyncio.sleep(0.2)  # each probe takes its time, like a real timeout
+        return ip in taken
+
+    home = [ipaddress.IPv4Network("192.168.0.0/22")]
+    started = time.monotonic()
+    report = await choose_block("192.168.0.1", home, probe=slow_probe)
+    elapsed = time.monotonic() - started
+    assert report.block.static_address == "192.168.0.251/32" and not report.blocked
+    assert max(calls.values()) == 1  # the camera and every address: probed once
+    assert elapsed < 1.0  # sequential probing would take over 2.5 s

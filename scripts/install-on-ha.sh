@@ -54,7 +54,12 @@ cp -r "$src_int" "$new_int"
 cfg="$new_app/config.yaml"
 base="$(sed -n 's/^version: "\{0,1\}\([0-9]*\.[0-9]*\)\..*/\1/p' "$cfg")"
 sed -i '/^image:/d' "$cfg"
-sed -i "s/^version: .*/version: \"$base.$(date +%y%m%d%H%M)\"/" "$cfg"
+# Seconds in the patch number, and always above the installed one, so two installs in
+# the same minute (or a skewed clock) still count as an update and rebuild.
+patch="$(date +%y%m%d%H%M%S)"
+installed="$(sed -n 's/^version: "\{0,1\}[0-9]*\.[0-9]*\.\([0-9]*\).*/\1/p' "$apps/dashcam_sync/config.yaml" 2>/dev/null || true)"
+if [ -n "$installed" ] && [ "$installed" -ge "$patch" ] 2>/dev/null; then patch=$((installed + 1)); fi
+sed -i "s/^version: .*/version: \"$base.$patch\"/" "$cfg"
 
 restore() {
   echo "Install failed; putting the previous version back." >&2

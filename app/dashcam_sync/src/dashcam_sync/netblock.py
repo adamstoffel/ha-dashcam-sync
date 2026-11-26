@@ -330,9 +330,9 @@ async def check_overlap(
             report.result = "camera_collides"
             report.conflicts = [str(block.camera)]
             return report
-        answering = [
-            str(addr) for addr in block.addresses() if addr != block.camera and await ask(str(addr))
-        ]
+        others = [str(a) for a in block.addresses() if a != block.camera]
+        answers = await asyncio.gather(*(ask(a) for a in others))  # in parallel
+        answering = [a for a, yes in zip(others, answers, strict=True) if yes]
         if answering:
             report.result = "address_in_use"
             report.conflicts = answering
@@ -365,9 +365,20 @@ async def choose_block(
     """
     nets = list(home_networks)
     known = list(known_device_ips)
+    # Each address is probed once, however many shapes include it, and candidates are
+    # probed together: the whole choice must fit the integration's request timeout.
+    probed: dict[str, asyncio.Task[bool | str]] = {}
+
+    async def once(ip: str) -> bool | str:
+        assert probe is not None
+        if ip not in probed:
+            probed[ip] = asyncio.ensure_future(probe(ip))
+        return await probed[ip]
+
+    cached = once if probe is not None else None
 
     async def check(block: CameraBlock) -> OverlapReport:
-        return await check_overlap(block, nets, known_device_ips=known, probe=probe)
+        return await check_overlap(block, nets, known_device_ips=known, probe=cached)
 
     if addressing == "block":
         block = (
@@ -388,7 +399,10 @@ async def choose_block(
         first = await check(compute_block(camera_ip))
         if not first.blocked or first.result == "camera_collides":
             return first
-    for candidate in point_to_point_candidates(camera_ip):
+    candidates = point_to_point_candidates(camera_ip)
+    if cached is not None:
+        await asyncio.gather(*(cached(c) for c in candidates))
+    for candidate in candidates:
         report = await check(point_to_point(camera_ip, candidate))
         if not report.blocked or report.result == "camera_collides":
             return report
