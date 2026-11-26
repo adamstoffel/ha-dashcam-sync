@@ -430,9 +430,14 @@ async function wizard(existing) {
   const ifaceNote = (i) => (i.in_use_by && i.in_use_by !== st.id ? `used by ${i.in_use_by}` : i.connected ? `connected${i.ssid ? " to " + i.ssid : ""}` : i.enabled ? "not connected" : "not configured · free");
   const read = () => {
     const v = (id) => { const el = $("#" + id, box); return el ? el.value.trim() : undefined; };
-    for (const [k, id] of [["interface", "w-if"], ["ssid", "w-ssid"], ["host", "w-host"], ["name", "w-name"], ["driver", "w-driver"], ["ipv4", "w-ipv4"], ["addressing", "w-addressing"], ["static_address", "w-static"]]) {
-      const val = v(id); if (val !== undefined) st[k] = val;
-    }
+    // One assignment per field (no st[k] = …), so it is plain which state holds typed text.
+    const iface = v("w-if"); if (iface !== undefined) st.interface = iface;
+    const ssid = v("w-ssid"); if (ssid !== undefined) st.ssid = ssid;
+    const host = v("w-host"); if (host !== undefined) st.host = host;
+    const name = v("w-name"); if (name !== undefined) st.name = name;
+    const driver = v("w-driver"); if (driver !== undefined) st.driver = driver;
+    const addressing = v("w-addressing"); if (addressing !== undefined) st.addressing = addressing;
+    const staticAddress = v("w-static"); if (staticAddress !== undefined) st.static_address = staticAddress;
     const pw = $("#w-pass", box); if (pw) st.password = pw.value;
     const ip = $("#w-camip", box);
     if (ip) st.host = ip.value === "other" ? $("#w-camip-other", box).value.trim() : ip.value;
@@ -508,7 +513,7 @@ async function wizard(existing) {
       body = `<div id="w-connect"></div>`;
     }
     box.innerHTML = `<div class="steps" aria-hidden="true">${STEPS.map((t, i) => `<span class="${i + 1 === step ? "on" : i + 1 < step ? "done" : ""}"></span>`).join("")}</div>
-      <p class="step-title">Step ${step} of 4 · ${STEPS[step - 1]}</p>
+      <p class="step-title">Step ${Number(step)} of 4 · ${esc(STEPS[step - 1])}</p>
       ${body}
       <div id="w-err"></div>
       ${step < 4 ? `<div class="actions end">${step > (edit ? 2 : 1) ? '<button class="text" id="w-back">Back</button>' : ""}<button id="w-next" class="primary">${step === 3 ? "Save and connect" : "Next"}</button></div>` : ""}`;
