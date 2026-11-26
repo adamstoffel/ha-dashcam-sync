@@ -161,9 +161,29 @@ async def async_apply_profile(hass: HomeAssistant, profile: WifiProfile) -> None
         ipv6=IPv6Config(method=InterfaceMethod.DISABLED),
     )
     try:
-        await client.network.update_interface(profile.interface, config)
+        await _post_interface_update(client, profile.interface, config)
     except Exception as err:
         raise WifiUnavailable(f"the Supervisor refused the Wi-Fi profile: {err}") from err
+
+
+async def _post_interface_update(client: Any, interface: str, config: Any) -> None:
+    """``network.update_interface`` with the Wi-Fi key the Supervisor actually accepts.
+
+    aiohasupervisor (0.3 to at least 0.11) serialises the Wi-Fi security as
+    ``method``, but the Supervisor's schema calls it ``auth`` and rejects the whole
+    request ("extra keys not allowed @ data['wifi']['method']"), so a protected
+    hotspot could never be joined. Send the same payload with the key renamed;
+    when the client's internals are not there, fall back to the library call.
+    """
+    payload = config.to_dict()
+    wifi = payload.get("wifi")
+    if isinstance(wifi, dict) and "method" in wifi:
+        wifi["auth"] = wifi.pop("method")
+    raw = getattr(client.network, "_client", None)
+    if raw is None or not hasattr(raw, "post"):
+        await client.network.update_interface(interface, config)
+        return
+    await raw.post(f"network/interface/{interface}/update", json=payload)
 
 
 async def async_disconnect(hass: HomeAssistant, interface: str) -> None:
