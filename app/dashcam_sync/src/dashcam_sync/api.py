@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import json
 import logging
@@ -930,6 +931,19 @@ def build_api_app(daemon: Daemon) -> web.Application:
     return app
 
 
+def _versioned_index() -> str:
+    """index.html with ``?v=<content hash>`` on the script and style URLs.
+
+    Browsers (and the Home Assistant app) keep an embedded panel's files cached; a URL
+    that changes whenever the file changes is the only reliable way to ship an update.
+    """
+    page = (STATIC_DIR / "index.html").read_text("utf-8")
+    for name in ("app.js", "style.css"):
+        digest = hashlib.sha256((STATIC_DIR / name).read_bytes()).hexdigest()[:12]
+        page = page.replace(f'"static/{name}"', f'"static/{name}?v={digest}"')
+    return page
+
+
 def build_ui_app(daemon: Daemon) -> web.Application:
     """Ingress app: static SPA plus the same routes, Supervisor proxy only."""
     app = web.Application(
@@ -939,9 +953,27 @@ def build_ui_app(daemon: Daemon) -> web.Application:
     app[SECRETS] = False
     _add_routes(app)
 
-    async def index(request: web.Request) -> web.StreamResponse:
-        return web.FileResponse(STATIC_DIR / "index.html")
+    page = _versioned_index()
 
+    async def index(request: web.Request) -> web.StreamResponse:
+        # Always revalidated; the script and style it names change URL with their content.
+        return web.Response(
+            text=page, content_type="text/html", headers={"Cache-Control": "no-cache"}
+        )
+
+    @web.middleware
+    async def static_headers(request: web.Request, handler: Any) -> web.StreamResponse:
+        response: web.StreamResponse = await handler(request)
+        if request.path.startswith("/static/"):
+            # A versioned URL never changes content: cache it. An unversioned one must
+            # be checked every time, so an old copy can never outlive an update.
+            versioned = "v" in request.query
+            response.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable" if versioned else "no-cache"
+            )
+        return response
+
+    app.middlewares.append(static_headers)
     app.router.add_get("/", index)
     app.router.add_static("/static", STATIC_DIR, show_index=False)
     return app

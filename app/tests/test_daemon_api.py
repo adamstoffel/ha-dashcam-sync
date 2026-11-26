@@ -171,7 +171,7 @@ async def test_ui_only_accepts_the_ingress_proxy(
 async def test_ui_serves_the_panel_and_hides_secrets(stack: Stack) -> None:
     async with stack.http.get(f"{stack.ui}/") as r:
         html = await r.text()
-        assert r.status == 200 and "Dashcam Sync" in html and 'href="static/style.css"' in html
+        assert r.status == 200 and "Dashcam Sync" in html and 'href="static/style.css?v=' in html
     async with stack.http.get(f"{stack.ui}/static/app.js") as r:
         js = await r.text()
         assert r.status == 200 and 'fetch("api/v1/' in js  # relative: works under ingress
@@ -1260,3 +1260,19 @@ async def test_join_status_shows_the_interface_state(stack: Stack) -> None:
     ]
     _, j = await stack.get("/api/v1/cameras/hot/join")
     assert j["interface"] == {"enabled": True, "connected": True, "ssid": "CAM"}
+
+
+async def test_the_panel_can_never_run_a_stale_script(stack: Stack) -> None:
+    """The panel lives in an iframe whose files browsers kept cached across updates."""
+    import re
+
+    async with stack.http.get(f"{stack.ui}/") as r:
+        assert r.status == 200 and r.headers["Cache-Control"] == "no-cache"
+        page = await r.text()
+    script = re.search(r'src="(static/app\.js\?v=[0-9a-f]{12})"', page)
+    style = re.search(r'href="(static/style\.css\?v=[0-9a-f]{12})"', page)
+    assert script and style, page
+    async with stack.http.get(f"{stack.ui}/{script[1]}") as r:
+        assert r.status == 200 and "immutable" in r.headers["Cache-Control"]
+    async with stack.http.get(f"{stack.ui}/static/app.js") as r:
+        assert r.headers["Cache-Control"] == "no-cache"  # an old unversioned URL revalidates
