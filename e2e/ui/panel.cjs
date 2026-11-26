@@ -63,12 +63,12 @@ async function waitFor(fn, what, timeout = 30000) {
     // ---- Overview: the fake camera syncs on its own.
     await page.goto(PANEL);
     assert.equal(await page.title(), "Dashcam Sync");
-    await page.waitForSelector(".card b:text('Fake dashcam')");
-    await waitFor(async () => /Last sync: (?!never)/.test(await page.locator("main").innerText()), "the first sync to finish");
+    await page.waitForSelector(".cam-card .name:text('Fake dashcam')");
+    await waitFor(async () => /last sync (?!never)/.test(await page.locator("main").innerText()), "the first sync to finish");
     const overview = await page.locator("main").innerText();
     assert.match(overview, /connected/);
-    assert.match(overview, /Status: idle/);
-    assert.match(overview, /local/);
+    assert.match(overview, /idle/);
+    assert.match(overview, /This Home Assistant/);
     await shot("overview");
 
     // ---- Clips: three real clips, thumbnails decode, a clip plays.
@@ -76,12 +76,13 @@ async function waitFor(fn, what, timeout = 30000) {
     await page.waitForSelector("img.thumb");
     assert.equal(await page.locator("main .card[data-id]").count(), 3);
     await waitFor(async () => (await page.$$eval("img.thumb", (imgs) => imgs.filter((i) => i.naturalWidth > 0).length)) === 3, "three decoded thumbnails");
-    const kinds = await page.locator("main .card[data-id] b").allInnerTexts();
+    const kinds = await page.locator("main .card[data-id] .meta .badge").allInnerTexts();
     assert.deepEqual(kinds.sort(), ["event", "normal", "normal"]);
     await page.click("main .card[data-id] button:text('Play') >> nth=0");
-    const video = page.locator("video");
+    const video = page.locator("dialog#player video");
     await video.waitFor();
     await waitFor(() => video.evaluate((v) => v.readyState >= 2 && v.videoWidth === 640), "the video to load");
+    await page.click("dialog#player .dlg-close");
     await shot("clips");
 
     // Keep toggles and persists.
@@ -89,17 +90,24 @@ async function waitFor(fn, what, timeout = 30000) {
     await first.locator("button:text('Keep')").click();
     await waitFor(async () => (await page.locator("main .card[data-id]").first().locator("button").allInnerTexts()).includes("Unkeep"), "Keep to stick");
 
+    // Deleting asks first, in the page (no browser confirm()); cancelling keeps the clip.
+    await page.locator("main .card[data-id]").nth(2).locator("button:text('Delete')").click();
+    await page.waitForSelector("dialog#confirm");
+    await page.click("#c-no");
+    assert.equal(await page.locator("main .card[data-id]").count(), 3, "cancel keeps the clip");
+
     // ---- Storage: bars and a retention dry run.
     await page.click("nav a[href='#storage']");
     await page.waitForSelector(".bar");
     await page.click("#dry");
-    await page.waitForSelector("#purge-out .card");
+    await page.waitForSelector("#purge-out div");
     assert.match(await page.locator("#purge-out").innerText(), /Would remove\s+0/);  // everything is fresh or kept
     await shot("storage");
 
     // ---- Settings: sync and retention persist; bad values are explained.
     await page.click("nav a[href='#settings']");
-    await page.waitForSelector("#save");
+    await page.waitForSelector("#l-target");
+    assert.equal(await page.locator("#savebar").isHidden(), true, "no save bar until something changes");
     assert.equal(await page.locator("#l-net-row").isHidden(), true, "no disk picker while local");
     assert.equal(await page.locator("#network_ret").isHidden(), true, "no disk retention while local");
     await page.check("input[name=s-mode][value=events_only]");
@@ -186,29 +194,67 @@ async function waitFor(fn, what, timeout = 30000) {
     assert.match(manualText, /Static · \d+\.\d+\.\d+\.\d+\/30/);
     assert.ok(!/secret-pass/.test(manualText), "the password is never shown");
     await shot("cameras-hotspot-manual");
-    await page.click("#w-close");
-    await waitFor(async () => /Camera hotspot · wlan9 · CARDV-1234/.test(await page.locator("main").innerText()), "the hotspot camera to be listed");
+    await page.click("dialog#wizard .dlg-close");
+    await waitFor(async () => /Camera hotspot · CARDV-1234 on wlan9/.test(await page.locator("main").innerText()), "the hotspot camera to be listed");
 
-    // Editing keeps the stored password when it is left blank.
+    // Actions live in a ⋮ menu; Edit keeps the stored password when it is left blank.
     const hot = page.locator("main .card[data-id=hotspot_cam]");
-    await hot.locator("button:text('Edit')").click();
+    await hot.locator(".menu-btn").click();
+    const menuItems = await hot.locator(".menu button").allInnerTexts();
+    assert.deepEqual(menuItems, ["Edit", "Network check", "Restore recording", "Pause", "Capture device profile", "Remove"]);
+    await hot.locator(".menu button[data-act=edit]").click();
     assert.equal(await page.locator("#w-camip").inputValue(), "other");
     assert.equal(await page.locator("#w-camip-other").inputValue(), "127.0.0.1:9");
     await page.fill("#w-ssid", "CARDV-5678");
     await page.click("#w-next");
     await page.click("#w-next");
     await page.waitForSelector("#w-connect table.kv");
-    await page.click("#w-close");
+    await page.click("dialog#wizard .dlg-close");
     const stored = await page.evaluate(async () => (await (await fetch("api/v1/cameras/hotspot_cam")).json()).options);
     assert.equal(stored.ssid, "CARDV-5678");
     assert.equal(stored.wifi_password, "********", "the password was kept, not cleared");
     await shot("cameras");
+
+    // A camera's detail view: status and its recent syncs.
+    await page.locator("main .card[data-id=fake]").click({ position: { x: 20, y: 20 } }).catch(async () => {
+      await page.locator("main .cam-card").first().click({ position: { x: 20, y: 20 } });
+    });
+    await page.waitForSelector("h2:text('Recent syncs')");
+    assert.match(await page.locator("main").innerText(), /ok/);
+    await page.click("a:text('‹ Cameras')");
+    await page.waitForSelector("#add");
+
+    // Removing a camera asks first.
+    await hot.locator(".menu-btn").click();
+    await hot.locator(".menu button[data-act=delete]").click();
+    await page.click("#c-yes");
+    await waitFor(async () => (await page.locator("main .card[data-id=hotspot_cam]").count()) === 0, "the camera to be removed");
 
     // ---- Logs.
     await page.click("nav a[href='#logs']");
     await page.waitForSelector("h2:text('Logs')");
     assert.match(await page.locator("pre").innerText(), /Dashcam Sync .* started/);
     await shot("logs");
+
+    // ---- Phone width: nothing is wider than the screen, the tabs stay on one line.
+    const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const pp = await phone.newPage();
+    pp.on("pageerror", (e) => failures.push("phone page error: " + e.message));
+    for (const v of ["overview", "cameras", "clips", "storage", "settings", "logs"]) {
+      await pp.goto(PANEL + "#" + v);
+      await pp.waitForSelector("main > :not(.empty)");
+      await pp.waitForTimeout(400);
+      const over = await pp.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      assert.ok(over <= 0, `${v} is ${over}px wider than a phone screen`);
+      const navHeight = await pp.evaluate(() => document.querySelector("nav").getBoundingClientRect().height);
+      assert.ok(navHeight < 60, `tabs wrap on ${v} (${navHeight}px)`);
+    }
+    await pp.goto(PANEL + "#cameras");
+    await pp.click("#add");
+    await pp.waitForSelector("dialog#wizard");
+    const sheet = await pp.evaluate(() => { const r = document.querySelector("dialog#wizard").getBoundingClientRect(); return [r.width, r.height]; });
+    assert.ok(sheet[0] >= 389 && sheet[1] >= 840, "the wizard is full screen on a phone: " + sheet);
+    await phone.close();
 
     // ---- The panel works under an ingress prefix: relative URLs only.
     const html = await (await ctx.request.get(PANEL)).text();

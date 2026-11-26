@@ -1,6 +1,7 @@
 "use strict";
 // All URLs are relative: Home Assistant serves this page under an ingress prefix.
 const $ = (sel, el = document) => el.querySelector(sel);
+const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
 const main = $("#main");
 const api = async (path, opts = {}) => {
   const res = await fetch("api/v1/" + path, {
@@ -20,33 +21,163 @@ const bytes = (n) => {
   return n.toFixed(i ? 1 : 0) + " " + u[i];
 };
 const when = (iso) => (iso ? new Date(iso).toLocaleString() : "never");
-const eta = (s) => (s == null ? "–" : s < 90 ? `${s} s` : `${Math.round(s / 60)} min`);
+const eta = (s) => (s == null ? "–" : s < 90 ? `${Math.round(s)} s` : `${Math.round(s / 60)} min`);
+const ago = (iso) => {
+  if (!iso) return "never";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : when(iso);
+};
+
+// ------------------------------------------------------------------ Home Assistant theme
+
+const THEME = {
+  "--primary-color": "--accent", "--text-primary-color": "--on-accent",
+  "--primary-background-color": "--bg", "--card-background-color": "--card", "--ha-card-background": "--card",
+  "--primary-text-color": "--fg", "--secondary-text-color": "--fg2", "--divider-color": "--line",
+  "--error-color": "--bad", "--success-color": "--ok", "--warning-color": "--warn",
+  "--ha-card-border-radius": "--radius", "--ha-card-box-shadow": "--shadow",
+};
+function inheritTheme() {
+  const root = document.documentElement;
+  if (window.parent === window) return;
+  root.classList.add("embedded");
+  let parentRoot;
+  try { parentRoot = window.parent.document.documentElement; } catch (e) { return; } // not same origin
+  const read = () => {
+    const cs = window.parent.getComputedStyle(parentRoot);
+    let themed = false;
+    for (const [theirs, ours] of Object.entries(THEME)) {
+      const v = cs.getPropertyValue(theirs).trim();
+      if (v) { root.style.setProperty(ours, v); themed = true; }
+    }
+    const font = cs.getPropertyValue("--ha-font-family-body").trim() || cs.getPropertyValue("--paper-font-body1_-_font-family").trim();
+    if (font) root.style.setProperty("--font", font);
+    root.classList.toggle("themed", themed);
+    const bg = getComputedStyle(root).getPropertyValue("--bg").trim();
+    const m = bg.match(/\d+(\.\d+)?/g);
+    if (m && m.length >= 3) root.style.colorScheme = (0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2]) < 128 ? "dark" : "light";
+    else if (/^#[0-9a-f]{6}$/i.test(bg)) {
+      const n = parseInt(bg.slice(1), 16);
+      root.style.colorScheme = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) < 128 ? "dark" : "light";
+    }
+  };
+  read();
+  new MutationObserver(read).observe(parentRoot, { attributes: true, attributeFilter: ["style", "class"] });
+  window.parent.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", () => setTimeout(read, 50));
+}
+
+// ------------------------------------------------------------------ building blocks
+
+let toastTimer = null;
+function toast(text, kind = "") {
+  const t = $("#toast");
+  t.textContent = text; t.className = kind; t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, kind === "bad" ? 6000 : 3000);
+}
+
+/** A dialog: `sheet` makes it full screen on phones. Returns {dlg, body, close}. */
+function openDialog(title, { sheet = false, small = false, id = "" } = {}) {
+  const dlg = document.createElement("dialog");
+  dlg.className = [sheet ? "sheet" : "", small ? "small" : ""].join(" ").trim();
+  if (id) dlg.id = id;
+  dlg.innerHTML = `<div class="dlg-head"><h2>${esc(title)}</h2><button class="icon dlg-close" aria-label="Close">✕</button></div><div class="dlg-body"></div>`;
+  document.body.append(dlg);
+  const close = () => { dlg.close(); };
+  dlg.addEventListener("close", () => { dlg.dispatchEvent(new Event("closed")); dlg.remove(); });
+  $(".dlg-close", dlg).onclick = close;
+  dlg.showModal();
+  return { dlg, body: $(".dlg-body", dlg), close, setTitle: (t) => { $(".dlg-head h2", dlg).textContent = t; } };
+}
+
+function confirmDialog(title, text, okLabel = "OK", danger = false) {
+  return new Promise((resolve) => {
+    const d = openDialog(title, { small: true, id: "confirm" });
+    let answer = false;
+    d.body.innerHTML = `<div>${text}</div><div class="actions end"><button class="text" id="c-no">Cancel</button>
+      <button class="${danger ? "primary danger-fill" : "primary"}" id="c-yes">${esc(okLabel)}</button></div>`;
+    if (danger) $("#c-yes", d.dlg).style.background = $("#c-yes", d.dlg).style.borderColor = "var(--bad)";
+    $("#c-no", d.dlg).onclick = d.close;
+    $("#c-yes", d.dlg).onclick = () => { answer = true; d.close(); };
+    d.dlg.addEventListener("closed", () => resolve(answer));
+  });
+}
+
+/** A ⋮ menu: items are [label, handler, {danger, hidden, divider}] */
+function menuButton(items, label = "More actions") {
+  const wrap = document.createElement("span");
+  wrap.className = "menu-wrap";
+  wrap.innerHTML = `<button class="icon menu-btn" aria-label="${esc(label)}" aria-haspopup="menu" aria-expanded="false">⋮</button><div class="menu" role="menu" hidden></div>`;
+  const btn = $(".menu-btn", wrap), menu = $(".menu", wrap);
+  for (const [text, handler, opts = {}] of items) {
+    if (opts.hidden) continue;
+    if (opts.divider) menu.append(document.createElement("hr"));
+    const b = document.createElement("button");
+    b.setAttribute("role", "menuitem"); b.textContent = text;
+    if (opts.danger) b.className = "danger";
+    if (opts.act) b.dataset.act = opts.act;
+    b.onclick = (e) => { e.stopPropagation(); hide(); handler(); };
+    menu.append(b);
+  }
+  const hide = () => { menu.hidden = true; btn.setAttribute("aria-expanded", "false"); };
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const open = menu.hidden;
+    $$(".menu").forEach((m) => { m.hidden = true; });
+    menu.hidden = !open; btn.setAttribute("aria-expanded", String(open));
+    if (open) menu.querySelector("button")?.focus();
+  };
+  wrap.addEventListener("keydown", (e) => { if (e.key === "Escape") { hide(); btn.focus(); } });
+  return wrap;
+}
+document.addEventListener("click", () => $$(".menu").forEach((m) => { m.hidden = true; }));
+
+const sig = (pct) => {
+  const n = pct == null ? 0 : pct >= 75 ? 4 : pct >= 50 ? 3 : pct >= 25 ? 2 : 1;
+  return `<span class="sig" title="${pct == null ? "" : pct + "%"}" aria-label="signal ${pct ?? "unknown"}%">${[1, 2, 3, 4].map((i) => `<i class="${i <= n ? "on" : ""}"></i>`).join("")}</span>`;
+};
 
 const ISSUES = {
-  no_wifi_adapter: "No Wi-Fi adapter was found. Home Assistant OS needs a supported USB Wi-Fi adapter to join a dashcam hotspot.",
+  no_wifi_adapter: "No Wi-Fi adapter was found. Home Assistant OS needs a supported Wi-Fi adapter to join a dashcam hotspot.",
   camera_invalid: "A camera entry is invalid and was disabled.",
   subnet_overlap: "The dashcam's address block overlaps something on your home network. The camera is paused.",
   default_route_changed: "The default route moved to the dashcam network. The Wi-Fi connection must be removed.",
-  camera_playback_mode: "A camera may be stuck in playback mode. Press Restore recording.",
+  camera_playback_mode: "A camera may be stuck in playback mode. Use Restore recording.",
   unsupported_camera: "No driver recognises this camera. Capture a device profile and open an issue.",
   listing_keeps_failing: "The camera answers but listing its files keeps failing.",
-  network_target_offline: "The network storage has been offline for over an hour.",
+  network_target_offline: "The disk or share has been offline for over an hour.",
   storage_low: "A storage target is below its minimum free space.",
 };
+const STATUS_TEXT = { idle: "idle", detecting: "detecting", preparing: "preparing", listing: "listing files", downloading: "downloading", restoring: "restoring recording", error: "error" };
 
-let view = "overview", timer = null, es = null;
+// ------------------------------------------------------------------ routing
 
+let view = "overview", timer = null;
+const route = () => {
+  const [path, query] = location.hash.slice(1).split("?");
+  const [name, sub] = path.split("/");
+  return { name: name || "overview", sub: sub ? decodeURIComponent(sub) : "", query: new URLSearchParams(query || "") };
+};
 async function render() {
-  clearInterval(timer);
-  view = location.hash.slice(1).split(/[/?]/)[0] || "overview";
-  document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.getAttribute("href") === "#" + view));
+  clearInterval(timer); clearTimeout(timer);
+  main.oninput = main.onchange = null; // page-specific listeners never outlive their page
+  const r = route();
+  view = r.name;
+  $$("nav a").forEach((a) => {
+    const on = a.getAttribute("href") === "#" + view;
+    a.classList.toggle("active", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  });
   try {
-    await ({ overview, cameras, clips, storage, settings, logs }[view] || overview)();
+    if (view === "cameras" && r.sub) await cameraDetail(r.sub);
+    else await ({ overview, cameras, clips, storage, settings, logs }[view] || overview)();
   } catch (e) {
     main.innerHTML = `<div class="card notice bad">${esc(e.message)}</div>`;
   }
 }
 window.addEventListener("hashchange", render);
+
+// ------------------------------------------------------------------ overview
 
 async function overview() {
   const draw = async () => {
@@ -56,30 +187,46 @@ async function overview() {
       ${s.issues.map((i) => `<div class="card notice ${i.key === "subnet_overlap" ? "bad" : ""}"><b>${esc(i.camera || "")}</b> ${esc(ISSUES[i.key] || i.key)}
         ${i.placeholders.conflicts?.length ? `<div class="muted">In conflict: ${esc(i.placeholders.conflicts.join(", "))}</div>` : ""}</div>`).join("")}
       <h2>Cameras</h2>
-      ${cams.length ? "" : `<div class="card">No camera yet. <a href="#cameras">Add one</a> with the setup wizard.</div>`}
+      ${cams.length ? "" : `<div class="card empty">No camera yet. <a href="#cameras">Add one</a>.</div>`}
       <div class="grid">${cams.map((c) => `
-        <div class="card">
-          <div class="row"><b>${esc(c.name)}</b>
-            <span class="pill ${c.connected ? "ok" : ""}">${c.connected ? "connected" : "away"}</span></div>
-          <div class="muted">${esc(c.driver || "not detected")} ${esc(c.model || "")}</div>
-          <div>Status: <b>${esc(c.sync_status)}</b>${c.current_file ? ` <span class="muted">${esc(c.current_file)}</span>` : ""}</div>
-          ${c.clips_remaining ? `<div>${c.clips_remaining} clips, ${bytes(c.bytes_remaining)} left · ${bytes(c.speed_bps)}/s · ETA ${eta(c.eta_seconds)}</div>` : ""}
-          <div class="muted">Last sync: ${when(c.last_sync)}</div>
-          ${c.blocked_reasons.length ? `<div class="pill bad">paused: ${esc(c.blocked_reasons.join(", "))}</div>` : ""}
-          ${c.restore_pending ? `<div class="pill warn">restore pending</div>` : ""}
-        </div>`).join("")}</div>
+        <a class="card cam-card" href="#cameras/${encodeURIComponent(c.id)}" style="color:inherit;text-decoration:none;display:block">
+          <div class="head"><span class="name">${esc(c.name)}</span>${statusBadge(c)}</div>
+          <div class="sub">${esc(STATUS_TEXT[c.sync_status] || c.sync_status)}${c.driver ? " · " + esc(c.driver) : ""} · last sync ${ago(c.last_sync)}</div>
+          ${progress(c)}
+          ${c.blocked_reasons.length ? `<div class="sub"><span class="badge bad">paused: ${esc(c.blocked_reasons.join(", "))}</span></div>` : ""}
+          ${c.restore_pending ? `<div class="sub"><span class="badge warn">restore pending</span></div>` : ""}
+        </a>`).join("")}</div>
       <h2>Storage</h2>
-      ${Object.values(s.storage.targets).map((t) => `<div class="card"><div class="row"><b>${esc(t.name)}</b>
-        <span class="pill ${t.online ? "ok" : "bad"}">${t.online ? "online" : "offline: " + esc(t.reason)}</span></div>
-        <div class="muted">${esc(t.root)}</div>
-        <div>Clips ${bytes(t.clip_bytes)} · free ${bytes(t.free_bytes)} of ${bytes(t.total_bytes)}</div></div>`).join("")}`;
+      <div class="grid">${Object.values(s.storage.targets).map(targetCard).join("")}</div>`;
   };
   await draw();
   timer = setInterval(() => draw().catch(() => {}), 3000);
 }
 
+function targetCard(t) {
+  const used = t.total_bytes ? 100 - (100 * t.free_bytes) / t.total_bytes : 0;
+  return `<div class="card"><div class="row"><span class="title">${t.name === "local" ? "This Home Assistant" : t.name === "network" ? "Disk or share" : esc(t.name)}</span>
+      <span class="badge ${t.online ? "ok" : "bad"}">${t.online ? "online" : esc(t.reason || "offline")}</span></div>
+    <div class="muted small">${esc(t.root)}</div>
+    <div class="bar" title="${used.toFixed(0)}% used"><div style="width:${used}%"></div></div>
+    <div>Clips ${bytes(t.clip_bytes)} · free ${bytes(t.free_bytes)} of ${bytes(t.total_bytes)}</div></div>`;
+}
+
+function statusBadge(s, enabled = true) {
+  if (!enabled) return `<span class="badge warn">paused</span>`;
+  if (s?.connected) return `<span class="badge ok">connected</span>`;
+  return `<span class="badge">not in range</span>`;
+}
+function progress(s) {
+  if (!s || !s.clips_remaining || s.sync_status !== "downloading") return "";
+  return `<div class="progress"><div class="bar"><div style="width:0%"></div></div>
+    <div class="small muted">${s.clips_remaining} clips, ${bytes(s.bytes_remaining)} left · ${bytes(s.speed_bps)}/s · about ${eta(s.eta_seconds)}</div></div>`;
+}
+
+// ------------------------------------------------------------------ cameras
+
 const DRIVERS = { auto: "Detect automatically", novatek: "Novatek", viidure_app: "Viidure app (/app)", http_index: "Plain HTTP file index" };
-const CAMERA_IPS = { "192.168.1.254": "Novatek-based cameras (most common)", "192.168.169.1": "cameras set up with the Viidure app" };
+const CAMERA_IPS = { "192.168.1.254": "Novatek (most common)", "192.168.169.1": "Viidure app cameras" };
 const SCAN_REASONS = {
   integration_not_connected: "Scanning goes through Home Assistant, and the Dashcam Sync integration is not connected. Type the camera's SSID.",
   no_answer: "Home Assistant did not answer the scan. Type the camera's SSID.",
@@ -98,11 +245,6 @@ const joinReason = (r) => {
   if (key === "app_unavailable") return "Home Assistant could not read the camera's Wi-Fi settings from the app.";
   return esc(JOIN_REASONS[key] || r);
 };
-const ago = (iso) => {
-  if (!iso) return "never";
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : when(iso);
-};
 const OVERLAP = {
   no_overlap: ["ok", "No overlap with your home network."],
   overlap_block_free: ["ok", "Overlaps your home network, but the reserved addresses are free."],
@@ -110,73 +252,139 @@ const OVERLAP = {
   address_in_use: ["bad", "Home Assistant's address on the camera network is in use on your network."],
   camera_collides: ["bad", "Something on your network has the camera's address."],
 };
+const connLine = (o) => (o.connection === "hotspot"
+  ? `Camera hotspot · ${esc(o.ssid || "?")} on ${esc(o.interface || "?")}`
+  : `Local network · ${esc(o.host || "auto-detect")}`);
+
+/** Actions shared by the camera list and the detail view. */
+function cameraMenu(o, after) {
+  return menuButton([
+    ["Edit", () => wizard(o), { act: "edit" }],
+    ["Network check", () => networkCheck(o.id), { act: "overlap", hidden: o.connection !== "hotspot" }],
+    ["Restore recording", async () => { await act(() => api(`cameras/${o.id}/restore`, { method: "POST" }), "Restore requested"); }, { act: "restore" }],
+    [o.enabled ? "Pause" : "Resume", async () => { await act(() => api(`cameras/${o.id}`, { method: "PATCH", body: { enabled: !o.enabled } }), o.enabled ? "Paused" : "Resumed"); after(); }, { act: "toggle" }],
+    ["Capture device profile", () => captureProfile(o), { act: "profile" }],
+    ["Remove", async () => {
+      if (await confirmDialog(`Remove ${o.name || o.id}?`, "The camera is removed from Dashcam Sync. Clips already downloaded are kept.", "Remove", true)) {
+        await act(() => api(`cameras/${o.id}`, { method: "DELETE" }), "Camera removed");
+        location.hash = "#cameras"; after();
+      }
+    }, { act: "delete", danger: true, divider: true }],
+  ]);
+}
+async function act(fn, okText) {
+  try { await fn(); toast(okText); } catch (e) { toast(e.message, "bad"); }
+}
+async function syncNow(id) { await act(() => api(`cameras/${id}/sync`, { method: "POST" }), "Sync requested"); }
+
+async function networkCheck(id) {
+  const d = openDialog("Network check", { small: true, id: "overlap-dlg" });
+  d.body.innerHTML = `<div class="muted"><span class="spinner"></span> Checking the camera's address block…</div>`;
+  try {
+    const r = await api(`cameras/${id}/overlap`, { method: "POST", body: {} });
+    const [cls, text] = OVERLAP[r.result] || ["warn", r.result];
+    d.body.innerHTML = `<p><span class="badge ${cls}">${cls === "ok" ? "OK" : "Problem"}</span> ${esc(text)}</p>
+      <dl class="kv"><dt>Reserved block</dt><dd><code>${esc(r.block || "?")}</code></dd>
+      ${r.conflicts?.length ? `<dt>In use</dt><dd>${esc(r.conflicts.join(", "))}</dd>` : ""}</dl>
+      <div class="actions end"><button class="primary" id="o-ok">OK</button></div>`;
+    $("#o-ok", d.dlg).onclick = d.close;
+  } catch (e) { d.body.innerHTML = `<div class="notice card bad">${esc(e.message)}</div>`; }
+}
+
+function captureProfile(o) {
+  const d = openDialog("Capture device profile", { small: true, id: "profile-dlg" });
+  d.body.innerHTML = `<p class="muted">Records how the camera answers, so a driver can be written or fixed. Wi-Fi passwords are not included.</p>
+    <label for="p-host">Camera address</label><input id="p-host" value="${esc(o.host || "")}" placeholder="192.168.1.254">
+    <div id="p-out"></div><div class="actions end"><button class="text" id="p-cancel">Cancel</button><button class="primary" id="p-go">Capture</button></div>`;
+  $("#p-cancel", d.dlg).onclick = d.close;
+  $("#p-go", d.dlg).onclick = async () => {
+    const host = $("#p-host", d.dlg).value.trim();
+    if (!host) return;
+    $("#p-out", d.dlg).innerHTML = `<p class="muted"><span class="spinner"></span> Capturing…</p>`;
+    try {
+      const bundle = await api("wizard/capture-profile", { method: "POST", body: { host } });
+      const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
+      $("#p-out", d.dlg).innerHTML = `<p><a href="${url}" download="device-profile-${esc(o.id)}.json">Download the profile</a> and attach it to a GitHub issue.</p>`;
+    } catch (e) { $("#p-out", d.dlg).innerHTML = `<div class="card notice bad">${esc(e.message)}</div>`; }
+  };
+}
 
 async function cameras() {
-  const list = await api("cameras");
-  main.innerHTML = `
-    <div class="row"><h2>Cameras</h2><button class="primary" id="add">Add camera</button></div>
-    ${list.length ? "" : `<div class="card muted">No camera yet.</div>`}
-    ${list.map(({ options: o, status: s }) => `
-      <div class="card" data-id="${esc(o.id)}">
-        <div class="row"><div><b>${esc(o.name || o.id)}</b>
-            <span class="pill ${!o.enabled ? "warn" : s?.connected ? "ok" : ""}">${!o.enabled ? "paused" : s?.connected ? "connected" : "not in range"}</span>
-            ${s && s.sync_status !== "idle" ? `<span class="pill">${esc(s.sync_status)}</span>` : ""}</div>
-          <div>
-            <button data-act="sync" ${s?.connected && o.enabled ? "" : "disabled"}>Sync now</button>
-            <button data-act="edit">Edit</button>
-            ${o.connection === "hotspot" ? '<button data-act="overlap">Network check</button>' : ""}
-            <details class="more"><summary>More</summary>
-              <button data-act="restore">Restore recording</button>
-              <button data-act="toggle">${o.enabled ? "Pause" : "Resume"}</button>
-              <button data-act="profile">Capture device profile</button>
-              <button data-act="delete" class="danger">Remove</button>
-            </details>
-          </div></div>
-        <div class="muted">${o.connection === "hotspot"
-          ? `Camera hotspot · ${esc(o.interface || "?")} · ${esc(o.ssid || "?")}${o.static_address ? ` · HA ${esc(o.static_address)}` : ""}`
-          : `Local network · ${esc(o.host || "auto-detect")}`}
-          · last sync ${ago(s?.last_sync)}${s?.error ? ` · <span class="bad-text">${esc(s.error)}</span>` : ""}</div>
-        <div class="out" hidden></div>
-      </div>`).join("")}
-    <div id="wizard"></div>`;
-  $("#add").onclick = () => wizard();
-  main.querySelectorAll("[data-act]").forEach((b) => {
-    b.onclick = async () => {
-      const card = b.closest(".card"), id = card.dataset.id, out = $(".out", card);
-      const show = (html) => { out.hidden = false; out.innerHTML = html; };
-      try {
-        const act = b.dataset.act;
-        if (act === "sync") { await api(`cameras/${id}/sync`, { method: "POST" }); show("Sync requested."); }
-        else if (act === "restore") { await api(`cameras/${id}/restore`, { method: "POST" }); show("Restore requested."); }
-        else if (act === "edit") wizard(list.find((x) => x.options.id === id).options);
-        else if (act === "toggle") { await api(`cameras/${id}`, { method: "PATCH", body: { enabled: b.textContent !== "Pause" } }); return cameras(); }
-        else if (act === "overlap") {
-          const r = await api(`cameras/${id}/overlap`, { method: "POST", body: {} });
-          const [cls, text] = OVERLAP[r.result] || ["warn", r.result];
-          show(`<span class="pill ${cls}">${esc(text)}</span> <span class="muted">Reserved ${esc(r.block || "")}${r.conflicts?.length ? ` · in use: ${esc(r.conflicts.join(", "))}` : ""}</span>`);
-        } else if (act === "profile") {
-          const host = list.find((x) => x.options.id === id).options.host || prompt("Camera address (IP or host:port)");
-          if (!host) return;
-          const bundle = await api("wizard/capture-profile", { method: "POST", body: { host } });
-          const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: "application/json" }));
-          show(`Captured. <a href="${url}" download="device-profile-${esc(id)}.json">Download the profile</a> and attach it to a GitHub issue.`);
-        } else if (act === "delete" && confirm(`Remove ${id}? Downloaded clips are kept.`)) { await api(`cameras/${id}`, { method: "DELETE" }); return cameras(); }
-      } catch (e) { show(`<span class="bad-text">${esc(e.message)}</span>`); }
-    };
-  });
+  const draw = async () => {
+    const list = await api("cameras");
+    main.innerHTML = `<div class="toolbar"><h2>Cameras</h2><button class="primary" id="add">Add camera</button></div>
+      ${list.length ? "" : `<div class="card empty">No camera yet. Add one to start syncing.</div>`}
+      <div id="cam-list"></div>`;
+    $("#add").onclick = () => wizard();
+    for (const { options: o, status: s } of list) {
+      const card = document.createElement("div");
+      card.className = "card cam-card"; card.dataset.id = o.id; card.tabIndex = 0;
+      card.innerHTML = `<div class="head"><span class="name">${esc(o.name || o.id)}</span></div>
+        <div class="sub">${statusBadge(s, o.enabled)}${s && !["idle", "error"].includes(s.sync_status) ? ` <span class="badge info">${esc(STATUS_TEXT[s.sync_status] || s.sync_status)}</span>` : ""}</div>
+        <div class="sub">${connLine(o)} · last sync ${ago(s?.last_sync)}</div>
+        ${s?.error ? `<div class="sub bad-text">${esc(s.error)}</div>` : ""}
+        ${progress(s)}
+        <div class="actions" style="margin-top:12px"><button class="sync-now" data-act="sync" ${s?.connected && o.enabled ? "" : "disabled"}>Sync now</button></div>`;
+      $(".head", card).append(cameraMenu(o, draw));
+      $(".sync-now", card).onclick = (e) => { e.stopPropagation(); syncNow(o.id); };
+      const open = (e) => { if (!e.target.closest("button, .menu-wrap")) location.hash = "#cameras/" + encodeURIComponent(o.id); };
+      card.onclick = open;
+      card.onkeydown = (e) => { if (e.key === "Enter" && e.target === card) open(e); };
+      $("#cam-list").append(card);
+    }
+  };
+  await draw();
+  timer = setInterval(() => { if (!document.querySelector("dialog[open]") && !$$(".menu").some((m) => !m.hidden)) draw().catch(() => {}); }, 5000);
+}
+
+async function cameraDetail(id) {
+  const draw = async () => {
+    const r = await api(`cameras/${encodeURIComponent(id)}`);
+    const o = r.options, s = r.status || {};
+    main.innerHTML = `<p><a href="#cameras">‹ Cameras</a></p>
+      <div class="card cam-card" style="cursor:default"><div class="head"><span class="name">${esc(o.name || o.id)}</span></div>
+        <div class="sub">${statusBadge(s, o.enabled)}</div>
+        <div class="sub">${connLine(o)}</div>
+        <div class="actions" style="margin-top:12px"><button class="sync-now primary" ${s.connected && o.enabled ? "" : "disabled"}>Sync now</button></div>
+        ${progress(s)}
+        ${s.error ? `<div class="card notice bad" style="margin:12px 0 0">${esc(s.error)}</div>` : ""}
+      </div>
+      <div class="card"><dl class="kv">
+        <dt>Status</dt><dd>${esc(STATUS_TEXT[s.sync_status] || s.sync_status || "–")}</dd>
+        <dt>Last sync</dt><dd>${when(s.last_sync)}</dd>
+        <dt>Last event clip</dt><dd>${when(s.last_event_clip)}</dd>
+        <dt>Camera</dt><dd>${esc([s.driver, s.model, s.firmware ? "fw " + s.firmware : ""].filter(Boolean).join(" · ") || "not detected yet")}</dd>
+        <dt>SD card free</dt><dd>${bytes(s.sd_free_bytes)}</dd>
+        ${o.connection === "hotspot" ? `<dt>Home Assistant address</dt><dd><code>${esc(o.static_address || "–")}</code></dd>` : ""}
+        ${s.blocked_reasons?.length ? `<dt>Paused because</dt><dd>${esc(s.blocked_reasons.join(", "))}</dd>` : ""}
+      </dl></div>
+      <h2>Recent syncs</h2>
+      ${r.sessions.length ? `<div class="card" style="padding:0 8px;overflow-x:auto"><table><tr><th>Started</th><th>Result</th><th>Clips</th><th>Data</th></tr>
+        ${r.sessions.map((x) => `<tr><td>${when(x.started_ts ? new Date(x.started_ts * 1000).toISOString() : null)}</td><td>${x.result === "ok" ? '<span class="badge ok">ok</span>' : `<span class="badge ${x.result ? "bad" : ""}">${esc(x.result || "running")}</span>${x.error ? `<div class="small muted">${esc(x.error)}</div>` : ""}`}</td><td>${x.clips}</td><td>${bytes(x.bytes)}</td></tr>`).join("")}</table></div>`
+        : `<div class="card empty">No sync yet.</div>`}`;
+    $(".head", main).append(cameraMenu(o, draw));
+    $(".sync-now", main).onclick = () => syncNow(o.id);
+  };
+  await draw();
+  timer = setInterval(() => { if (!document.querySelector("dialog[open]") && !$$(".menu").some((m) => !m.hidden)) draw().catch(() => {}); }, 4000);
 }
 
 // ------------------------------------------------------------------ setup wizard
 
+const LIKELY_CAMERA = /cardv|dash|dvr|cam|viofo|70mai|vantrue|blackvue|nextbase|thinkware|garmin|redtiger|azdome|rexing|wolfbox|ddpai|^p2dc|dc[-_ ]?\w*$/i;
+
 async function wizard(existing) {
-  const box = $("#wizard");
   const edit = !!existing;
+  const d = openDialog(edit ? `Edit ${existing.name || existing.id}` : "Add camera", { sheet: true, id: "wizard" });
+  const box = d.body;
   const st = {
     id: existing?.id || "", name: existing?.name || "", connection: existing?.connection || "hotspot",
     interface: existing?.interface || "", ssid: existing?.ssid || "", password: "",
     host: existing?.host || "", driver: existing?.driver || "auto", ipv4: existing?.ipv4 || "static",
-    static_address: existing?.static_address || "", step: edit ? 2 : 1, detection: null,
+    static_address: existing?.static_address || "", step: edit ? 2 : 1, detection: null, aps: null,
   };
+  let poller = null;
+  d.dlg.addEventListener("closed", () => { clearInterval(poller); render(); });
   let ifaces = { known: false, wireless: [] };
   try { ifaces = await api("wizard/interfaces"); } catch (e) { /* listed as unavailable below */ }
   if (!st.interface) {
@@ -186,56 +394,66 @@ async function wizard(existing) {
   const STEPS = ["Connection", "Details", "Name", "Connect"];
   const camIp = () => (!st.host ? "192.168.1.254" : CAMERA_IPS[st.host.split(":")[0]] ? st.host.split(":")[0] : "other");
   const slug = (n) => (n || "camera").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "").slice(0, 32) || "camera";
+  const ifaceNote = (i) => (i.in_use_by && i.in_use_by !== st.id ? `used by ${i.in_use_by}` : i.connected ? `connected${i.ssid ? " to " + i.ssid : ""}` : i.enabled ? "not connected" : "not configured · free");
   const read = () => {
-    const v = (id) => { const el = $("#" + id); return el ? el.value.trim() : undefined; };
+    const v = (id) => { const el = $("#" + id, box); return el ? el.value.trim() : undefined; };
     for (const [k, id] of [["interface", "w-if"], ["ssid", "w-ssid"], ["host", "w-host"], ["name", "w-name"], ["driver", "w-driver"], ["ipv4", "w-ipv4"], ["static_address", "w-static"]]) {
       const val = v(id); if (val !== undefined) st[k] = val;
     }
-    const pw = $("#w-pass"); if (pw) st.password = pw.value;
-    const ip = $("#w-camip");
-    if (ip) st.host = ip.value === "other" ? $("#w-camip-other").value.trim() : ip.value;
+    const pw = $("#w-pass", box); if (pw) st.password = pw.value;
+    const ip = $("#w-camip", box);
+    if (ip) st.host = ip.value === "other" ? $("#w-camip-other", box).value.trim() : ip.value;
     const conn = box.querySelector("input[name=w-conn]:checked"); if (conn) st.connection = conn.value;
   };
-  const err = (msg) => { $("#w-err").innerHTML = msg ? `<div class="card notice bad">${msg}</div>` : ""; };
-  const note = (msg) => { $("#w-err").innerHTML = msg ? `<div class="card notice info">${msg}</div>` : ""; };
-  const ifaceOptions = () => ifaces.wireless.map((i) => {
-    const note = i.in_use_by && i.in_use_by !== st.id ? `used by ${i.in_use_by}` : i.connected ? `connected${i.ssid ? " to " + i.ssid : ""}` : i.enabled ? "not connected" : "not configured · free";
-    return `<option value="${esc(i.name)}" ${i.name === st.interface ? "selected" : ""}>${esc(i.name)} · ${esc(note)}</option>`;
-  }).join("");
+  const err = (msg) => { $("#w-err", box).innerHTML = msg ? `<div class="card notice bad" style="margin:16px 0 0">${msg}</div>` : ""; };
+  const note = (msg) => { $("#w-err", box).innerHTML = msg ? `<div class="card notice info" style="margin:16px 0 0">${msg}</div>` : ""; };
   const summary = (r, b) => {
-    const caps = Object.entries(r.capabilities || {}).filter(([, on]) => on).map(([k]) => `<span class="pill ok">${esc(k.replace(/_/g, " "))}</span>`).join(" ");
-    return `<div class="card"><b>Detected a ${esc(r.driver)} camera</b> at ${esc(r.host)}${r.firmware ? ` · firmware ${esc(r.firmware)}` : ""}${r.model ? ` · ${esc(r.model)}` : ""}
-      <div>${caps || ""}</div>
-      ${b ? `<div class="muted">Reserved address block ${esc(b.block)} · Home Assistant uses ${esc(b.static_address)}
-        ${b.overlaps_home_network ? '<span class="pill warn">overlaps your home network: only these 4 addresses are claimed</span>' : '<span class="pill ok">no overlap with your home network</span>'}</div>` : ""}</div>`;
+    const caps = Object.entries(r.capabilities || {}).filter(([, on]) => on).map(([k]) => `<span class="badge ok">${esc(k.replace(/_/g, " "))}</span>`).join(" ");
+    return `<div class="card" style="margin:12px 0 0"><b>Detected a ${esc(r.driver)} camera</b> at ${esc(r.host)}${r.firmware ? ` · firmware ${esc(r.firmware)}` : ""}${r.model ? ` · ${esc(r.model)}` : ""}
+      <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap">${caps}</div>
+      ${b ? `<div class="muted small" style="margin-top:8px">Reserved address block ${esc(b.block)} · Home Assistant uses ${esc(b.static_address)}
+        ${b.overlaps_home_network ? '<span class="badge warn">overlaps your home network: only these 4 addresses are claimed</span>' : '<span class="badge ok">no overlap with your home network</span>'}</div>` : ""}</div>`;
+  };
+  const apList = () => {
+    if (!st.aps) return "";
+    if (!st.aps.length) return `<div class="hint">No networks found. Is the camera on and in range?</div>`;
+    return `<div class="aps" role="listbox" aria-label="Networks">${st.aps.map((a) => {
+      const likely = LIKELY_CAMERA.test(a.ssid);
+      return `<button class="ap ${likely ? "likely" : ""} ${a.ssid === st.ssid ? "chosen" : ""}" role="option" aria-selected="${a.ssid === st.ssid}" data-ssid="${esc(a.ssid)}">
+        <span class="ssid">${esc(a.ssid)}</span>${likely ? '<span class="badge info">dashcam?</span>' : ""}${sig(a.signal)}</button>`;
+    }).join("")}</div>`;
   };
 
   const draw = () => {
-    clearInterval(timer);
+    clearInterval(poller);
     const step = st.step;
     let body = "";
     if (step === 1) {
-      body = `<label>How does the camera connect?</label>
-        <p><label class="choice"><input type="radio" name="w-conn" value="hotspot" ${st.connection === "hotspot" ? "checked" : ""}> <b>Camera hotspot</b> <span class="muted">· the camera runs its own Wi-Fi; Home Assistant joins it with a Wi-Fi interface</span></label>
-        <label class="choice"><input type="radio" name="w-conn" value="lan" ${st.connection === "lan" ? "checked" : ""}> <b>Local network</b> <span class="muted">· the camera is a client on your LAN</span></label></p>`;
+      body = `<div class="choices">
+        <label class="choice"><input type="radio" name="w-conn" value="hotspot" ${st.connection === "hotspot" ? "checked" : ""}><span><b>Camera hotspot</b>
+          <span class="muted">The camera runs its own Wi-Fi; Home Assistant joins it with a Wi-Fi interface.</span></span></label>
+        <label class="choice"><input type="radio" name="w-conn" value="lan" ${st.connection === "lan" ? "checked" : ""}><span><b>Local network</b>
+          <span class="muted">The camera is a client on your LAN.</span></span></label></div>`;
     } else if (step === 2 && st.connection === "hotspot") {
+      const one = ifaces.wireless.length === 1 ? ifaces.wireless[0] : null;
       body = `<label for="w-if">Wi-Fi interface</label>
-        ${ifaces.wireless.length ? `<select id="w-if">${ifaceOptions()}</select>`
-          : `<input id="w-if" value="${esc(st.interface)}" placeholder="wlan0"><div class="muted">${ifaces.known ? "Home Assistant reports no Wi-Fi interface. A supported USB Wi-Fi adapter is the usual fix." : "Interfaces are not available here; type the name shown under Settings › System › Network."}</div>`}
+        ${one ? `<input type="hidden" id="w-if" value="${esc(one.name)}"><div><b>${esc(one.name)}</b> <span class="muted">· ${esc(ifaceNote(one))}</span></div>`
+          : ifaces.wireless.length ? `<select id="w-if">${ifaces.wireless.map((i) => `<option value="${esc(i.name)}" ${i.name === st.interface ? "selected" : ""}>${esc(i.name)} · ${esc(ifaceNote(i))}</option>`).join("")}</select>`
+          : `<input id="w-if" value="${esc(st.interface)}" placeholder="wlan0"><div class="hint">${ifaces.known ? "Home Assistant reports no Wi-Fi interface. A supported USB Wi-Fi adapter is the usual fix." : "Interfaces are not available here; type the name shown under Settings › System › Network."}</div>`}
         <label for="w-ssid">Camera SSID</label>
-        <div class="row" style="justify-content:flex-start"><input id="w-ssid" list="aps" value="${esc(st.ssid)}"><datalist id="aps"></datalist> <button id="w-scan">Scan</button></div>
-        <div id="w-aps"></div>
+        <div class="field-row"><input id="w-ssid" value="${esc(st.ssid)}" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="w-scan">Scan</button></div>
+        <div id="w-aps">${apList()}</div>
         <label for="w-pass">Camera Wi-Fi password</label>
-        <input id="w-pass" type="password" autocomplete="off" placeholder="${edit ? "leave blank to keep the current one" : ""}">
+        <input id="w-pass" type="password" autocomplete="off" placeholder="${edit ? "leave empty to keep the current one" : ""}">
         <label for="w-camip">Camera IP on its hotspot</label>
         <select id="w-camip">${Object.entries(CAMERA_IPS).map(([ip, t]) => `<option value="${ip}" ${camIp() === ip ? "selected" : ""}>${ip} · ${t}</option>`).join("")}
           <option value="other" ${camIp() === "other" ? "selected" : ""}>Other…</option></select>
-        <input id="w-camip-other" value="${camIp() === "other" ? esc(st.host) : ""}" placeholder="e.g. 192.168.0.1" ${camIp() === "other" ? "" : "hidden"}>
-        <div class="muted">Shown in the camera's phone app or manual. Home Assistant's address on the camera network is picked next to it.</div>`;
+        <input id="w-camip-other" value="${camIp() === "other" ? esc(st.host) : ""}" placeholder="e.g. 192.168.0.1" style="margin-top:8px" ${camIp() === "other" ? "" : "hidden"}>
+        <div class="hint">Shown in the camera's phone app or manual. Home Assistant's address on the camera network is picked next to it.</div>`;
     } else if (step === 2) {
       body = `<label for="w-host">Camera IP or host</label>
-        <div class="row" style="justify-content:flex-start"><input id="w-host" value="${esc(st.host)}" placeholder="192.168.2.50"> <button id="w-probe">Test</button></div>
-        <div class="muted">Leave empty to look for the camera automatically. Give it a DHCP reservation in your router so the address does not change.</div>
+        <div class="field-row"><input id="w-host" value="${esc(st.host)}" placeholder="192.168.2.50"><button id="w-probe">Test</button></div>
+        <div class="hint">Leave empty to look for the camera automatically. Give it a DHCP reservation in your router so the address does not change.</div>
         <div id="w-det">${st.detection ? summary(st.detection) : ""}</div>`;
     } else if (step === 3) {
       body = `<label for="w-name">Name</label><input id="w-name" value="${esc(st.name)}" placeholder="Polestar 2">
@@ -244,47 +462,50 @@ async function wizard(existing) {
           ${st.connection === "hotspot" ? `
           <label for="w-ipv4">IPv4 on the camera network</label><select id="w-ipv4"><option value="static" ${st.ipv4 !== "auto" ? "selected" : ""}>Static, small block around the camera (recommended)</option><option value="auto" ${st.ipv4 === "auto" ? "selected" : ""}>DHCP from the camera</option></select>
           <label for="w-static">Home Assistant address (CIDR)</label><input id="w-static" value="${esc(st.static_address)}" placeholder="computed, e.g. 192.168.1.253/30">` : ""}
-          <label>ID</label><input value="${esc(edit ? st.id : slug(st.name))}" disabled>
-          <div class="muted">Used in folder names and entity IDs${edit ? "; it cannot change" : ""}.</div>
+          <label for="w-id">ID</label><input id="w-id" value="${esc(edit ? st.id : slug(st.name))}" disabled>
+          <div class="hint">Used in folder names and entity IDs${edit ? "; it cannot change" : ""}.</div>
         </details>`;
     } else {
       body = `<div id="w-connect"></div>`;
     }
-    box.innerHTML = `<div class="card"><div class="row"><h2>${edit ? "Edit " + esc(st.name || st.id) : "Add camera"}</h2><button id="w-close">Close</button></div>
-      <div class="steps">${STEPS.map((t, i) => `<span class="${i + 1 === step ? "on" : i + 1 < step ? "done" : ""}">${i + 1}. ${t}</span>`).join("")}</div>
+    box.innerHTML = `<div class="steps" aria-hidden="true">${STEPS.map((t, i) => `<span class="${i + 1 === step ? "on" : i + 1 < step ? "done" : ""}"></span>`).join("")}</div>
+      <p class="step-title">Step ${step} of 4 · ${STEPS[step - 1]}</p>
       ${body}
       <div id="w-err"></div>
-      ${step < 4 ? `<p>${step > (edit ? 2 : 1) ? '<button id="w-back">Back</button> ' : ""}<button id="w-next" class="primary">${step === 3 ? "Save and connect" : "Next"}</button></p>` : ""}</div>`;
-    $("#w-close").onclick = () => { clearInterval(timer); box.innerHTML = ""; cameras(); };
-    if ($("#w-back")) $("#w-back").onclick = () => { read(); st.step -= 1; draw(); };
-    if ($("#w-next")) $("#w-next").onclick = next;
-    if ($("#w-name")) $("#w-name").oninput = (e) => { const id = $("#w-adv input[disabled]"); if (id && !edit) id.value = slug(e.target.value); };
-    if ($("#w-camip")) $("#w-camip").onchange = (e) => { $("#w-camip-other").hidden = e.target.value !== "other"; };
-    if ($("#w-scan")) $("#w-scan").onclick = async () => {
+      ${step < 4 ? `<div class="actions end">${step > (edit ? 2 : 1) ? '<button class="text" id="w-back">Back</button>' : ""}<button id="w-next" class="primary">${step === 3 ? "Save and connect" : "Next"}</button></div>` : ""}`;
+    if ($("#w-back", box)) $("#w-back", box).onclick = () => { read(); st.step -= 1; draw(); };
+    if ($("#w-next", box)) $("#w-next", box).onclick = next;
+    if ($("#w-name", box)) $("#w-name", box).oninput = (e) => { if (!edit) $("#w-id", box).value = slug(e.target.value); };
+    if ($("#w-camip", box)) $("#w-camip", box).onchange = (e) => { $("#w-camip-other", box).hidden = e.target.value !== "other"; };
+    const bindAps = () => $$("button.ap", box).forEach((b) => {
+      b.onclick = () => { st.ssid = b.dataset.ssid; $("#w-ssid", box).value = st.ssid; $("#w-aps", box).innerHTML = apList(); bindAps(); $("#w-pass", box).focus(); };
+    });
+    bindAps();
+    if ($("#w-scan", box)) $("#w-scan", box).onclick = async () => {
       read();
-      const btn = $("#w-scan"); btn.disabled = true; btn.textContent = "Scanning…";
-      note(`Asking Home Assistant which networks ${esc(st.interface)} can see…`);
+      const btn = $("#w-scan", box); btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>`;
+      note(`Asking Home Assistant which networks ${esc(st.interface)} can see… this takes a few seconds.`);
       try {
         const r = await api("wizard/wifi-scan?interface=" + encodeURIComponent(st.interface));
         if (!r.available) return note(SCAN_REASONS[r.reason] || `Scanning did not work (${esc(r.reason || "unknown")}). Type the camera's SSID.`);
-        $("#aps").innerHTML = r.accesspoints.map((a) => `<option value="${esc(a.ssid)}">`).join("");
-        $("#w-aps").innerHTML = r.accesspoints.length
-          ? `<div class="aps">${r.accesspoints.map((a) => `<button class="ap" data-ssid="${esc(a.ssid)}">${esc(a.ssid)} <span class="muted">${a.signal == null ? "" : a.signal + "%"}</span></button>`).join("")}</div>`
-          : `<div class="muted">No networks found. Is the camera on and in range?</div>`;
-        $("#w-aps").querySelectorAll("button.ap").forEach((b) => { b.onclick = () => { $("#w-ssid").value = b.dataset.ssid; }; });
+        st.aps = r.accesspoints;
+        $("#w-aps", box).innerHTML = apList(); bindAps();
         note("");
       } catch (e) { err(esc(e.message)); }
-      finally { btn.disabled = false; btn.textContent = "Scan"; }
+      finally { btn.disabled = false; btn.textContent = st.aps ? "Scan again" : "Scan"; }
     };
-    if ($("#w-probe")) $("#w-probe").onclick = async () => {
+    if ($("#w-probe", box)) $("#w-probe", box).onclick = async () => {
       read();
+      const btn = $("#w-probe", box); btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>`;
       try {
         const r = await api("wizard/probe", { method: "POST", body: { host: st.host } });
         if (!r.supported) return err("No driver recognised a camera there. Check the address, or capture a device profile.");
-        st.host = r.host; st.detection = r; $("#w-host").value = r.host; $("#w-det").innerHTML = summary(r); err("");
+        st.host = r.host; st.detection = r; $("#w-host", box).value = r.host; $("#w-det", box).innerHTML = summary(r); err("");
       } catch (e) { err(esc(e.message)); }
+      finally { btn.disabled = false; btn.textContent = "Test"; }
     };
     if (step === 4) connect();
+    else (box.querySelector("input:not([type=hidden]):not([disabled]), select") || $("#w-next", box))?.focus();
   };
 
   const next = async () => {
@@ -302,14 +523,15 @@ async function wizard(existing) {
       if (st.host) body.host = st.host;
       if (st.connection === "hotspot") Object.assign(body, { interface: st.interface, ssid: st.ssid, wifi_password: st.password, ipv4: st.ipv4 });
       if (st.connection === "hotspot" && st.static_address) body.static_address = st.static_address;
+      const btn = $("#w-next", box); btn.disabled = true;
       try { const r = await api("wizard/camera", { method: "POST", body }); st.id = r.camera; }
-      catch (e) { return err(esc(e.message)); }
+      catch (e) { btn.disabled = false; return err(esc(e.message)); }
     }
     st.step += 1; draw();
   };
 
   const connect = async () => {
-    const out = $("#w-connect");
+    const out = $("#w-connect", box);
     const detect = async (host) => {
       try {
         const r = await api("wizard/probe", { method: "POST", body: { host } });
@@ -319,74 +541,92 @@ async function wizard(existing) {
         return summary(r, b);
       } catch (e) { return null; }
     };
-    const done = (html) => { clearInterval(timer); out.innerHTML = `${html}<p><button id="w-done" class="primary">Done</button></p>`; $("#w-done").onclick = () => { box.innerHTML = ""; cameras(); }; };
+    const done = (html) => {
+      clearInterval(poller);
+      out.innerHTML = `${html}<div class="actions end"><button id="w-done" class="primary">Done</button></div>`;
+      $("#w-done", box).onclick = d.close;
+      $("#w-done", box).focus();
+    };
     if (st.connection === "lan") {
-      out.innerHTML = `<div class="muted">Looking for the camera…</div>`;
+      out.innerHTML = `<p class="muted"><span class="spinner"></span> Looking for the camera…</p>`;
       const html = await detect(st.host);
-      return done(html || `<div class="card notice">Saved. The camera did not answer yet; it is picked up as soon as it is reachable.</div>`);
+      return done(html || `<div class="card notice info">Saved. The camera did not answer yet; it is picked up as soon as it is reachable.</div>`);
     }
-    const manual = (p, why) => `<div class="card notice"><b>Join the camera's Wi-Fi in Home Assistant</b>${why ? `<div class="muted">${why}</div>` : ""}
-      <div>Open <a href="/config/network" target="_top">Settings › System › Network</a>, choose <b>${esc(p.interface)}</b>, then:</div>
+    const manual = (p, why) => `<div class="card notice" style="margin:12px 0 0"><b>Join the camera's Wi-Fi in Home Assistant</b>${why ? `<div class="muted">${why}</div>` : ""}
+      <p>Open <a href="/config/network" target="_top">Settings › System › Network</a>, choose <b>${esc(p.interface)}</b>, then:</p>
       <table class="kv">${[["Wi-Fi mode", "Infrastructure"], ["SSID", p.ssid], ["Security", "WPA-PSK, with the camera password you entered"],
         ["IPv4", p.ipv4 === "auto" ? "Automatic (DHCP)" : `Static · ${p.address || "?"}`], ["Gateway", "none"], ["DNS servers", "none"], ["IPv6", "Disabled"]]
-        .map(([k, v]) => `<tr><td class="muted">${k}</td><td><code>${esc(v)}</code></td><td>${["SSID", "IPv4"].includes(k) && v ? `<button class="copy" data-v="${esc(k === "IPv4" ? p.address || "" : v)}">Copy</button>` : ""}</td></tr>`).join("")}</table>
-      <div class="muted">No gateway and no DNS keep your default route and name resolution on Ethernet.</div></div>`;
+        .map(([k, v]) => `<tr><td>${k}</td><td><code>${esc(v)}</code></td><td>${["SSID", "IPv4"].includes(k) && v ? `<button class="text copy" data-v="${esc(k === "IPv4" ? p.address || "" : v)}">Copy</button>` : ""}</td></tr>`).join("")}</table>
+      <div class="hint">No gateway and no DNS keep your default route and name resolution on Ethernet.</div></div>`;
     const started = Date.now();
     const poll = async () => {
       let j;
       try { j = await api(`cameras/${st.id}/join`); } catch (e) { return; }
-      const ifState = j.interface ? `<div class="muted">${esc(j.profile.interface)}: ${j.interface.connected ? `connected${j.interface.ssid ? " to " + esc(j.interface.ssid) : ""}` : j.interface.enabled ? "not connected" : "not configured"}</div>` : "";
+      const ifState = j.interface ? `<div class="hint">${esc(j.profile.interface)}: ${j.interface.connected ? `connected${j.interface.ssid ? " to " + esc(j.interface.ssid) : ""}` : j.interface.enabled ? "not connected" : "not configured"}</div>` : "";
       const slow = Date.now() - started > 90000 && ["joined", "manual"].includes(j.state)
-        ? `<div class="card notice info"><b>Still no answer from the camera.</b><ul>
+        ? `<div class="card notice info" style="margin:12px 0 0"><b>Still no answer from the camera.</b><ul>
             <li>Is the camera on and the car within range? Check the signal under <a href="/config/network" target="_top">Settings › System › Network</a> › ${esc(j.profile.interface)} › Search networks.</li>
             <li>${j.interface && !j.interface.connected ? "The interface is not connected: the SSID or password may be wrong (Edit the camera)." : "The interface is connected: check the camera IP (Edit › Details); Home Assistant uses " + esc(j.profile.address || "?") + "."}</li>
-            <li>Waiting continues; the camera is also picked up later, whenever it is in range.</li></ul></div>` : "";
+            <li>You can close this; the camera is picked up whenever it is in range.</li></ul></div>` : "";
+      const waiting = `<p class="muted"><span class="spinner"></span> Waiting for the camera to answer…</p>`;
       let html = "";
-      if (j.state === "requested") html = `<div class="muted">Asking Home Assistant to join <b>${esc(j.profile.ssid)}</b> on ${esc(j.profile.interface)}…</div>`;
-      else if (j.state === "joined") html = `<div><span class="pill ok">joined</span> Waiting for the camera to answer…</div>${ifState}${slow}`;
-      else if (j.state === "failed") html = `<div class="card notice bad"><b>Could not join.</b> ${joinReason(j.reason)}</div><p><button id="w-retry">Try again</button></p>${manual(j.profile)}`;
-      else if (j.state === "manual") html = manual(j.profile, joinReason(j.reason)) + `<div class="muted">Waiting for the camera to answer…</div>${ifState}${slow}`;
+      if (j.state === "requested") html = `<p class="muted"><span class="spinner"></span> Asking Home Assistant to join <b>${esc(j.profile.ssid)}</b> on ${esc(j.profile.interface)}…</p>`;
+      else if (j.state === "joined") html = `<p><span class="badge ok">joined</span> Home Assistant joined <b>${esc(j.profile.ssid)}</b>.</p>${waiting}${ifState}${slow}`;
+      else if (j.state === "failed") html = `<div class="card notice bad"><b>Could not join.</b> ${joinReason(j.reason)}</div><div class="actions"><button id="w-retry">Try again</button></div>${manual(j.profile)}`;
+      else if (j.state === "manual") html = manual(j.profile, joinReason(j.reason)) + waiting + ifState + slow;
       if (j.camera_connected) {
         const det = await detect(st.host || j.profile.camera || "");
-        return done(det || `<div><span class="pill ok">connected</span> The camera answers.</div>`);
+        return done(det || `<p><span class="badge ok">connected</span> The camera answers.</p>`);
       }
-      out.innerHTML = html;
-      out.querySelectorAll("button.copy").forEach((b) => { b.onclick = () => navigator.clipboard?.writeText(b.dataset.v); });
-      if ($("#w-retry")) $("#w-retry").onclick = async () => { await api(`cameras/${st.id}/join`, { method: "POST" }); poll(); };
+      out.innerHTML = html + `<div class="actions end"><button class="text" id="w-later">Close, finish later</button></div>`;
+      $$("button.copy", out).forEach((b) => { b.onclick = () => { navigator.clipboard?.writeText(b.dataset.v); toast("Copied"); }; });
+      $("#w-later", out).onclick = d.close;
+      if ($("#w-retry", out)) $("#w-retry", out).onclick = async () => { await api(`cameras/${st.id}/join`, { method: "POST" }); poll(); };
     };
     try { await api(`cameras/${st.id}/join`, { method: "POST" }); } catch (e) { out.innerHTML = `<div class="card notice bad">${esc(e.message)}</div>`; return; }
     await poll();
-    timer = setInterval(poll, 2000);
+    poller = setInterval(poll, 2000);
   };
 
   draw();
 }
 
+// ------------------------------------------------------------------ clips
+
 async function clips() {
   const list = await api("cameras");
-  const camId = new URLSearchParams(location.hash.split("?")[1] || "").get("camera") || list[0]?.options.id || "";
+  const camId = route().query.get("camera") || list[0]?.options.id || "";
   const data = camId ? await api(`clips?camera=${encodeURIComponent(camId)}&limit=60`) : [];
-  main.innerHTML = `
-    <div class="row"><h2>Clips</h2>
-      <select id="cam">${list.map(({ options: o }) => `<option value="${esc(o.id)}" ${o.id === camId ? "selected" : ""}>${esc(o.name || o.id)}</option>`).join("")}</select></div>
-    <div id="player"></div>
-    ${data.length ? "" : `<div class="card muted">No clips yet.</div>`}
-    ${data.map((c) => `<div class="card row" data-id="${c.id}">
+  main.innerHTML = `<div class="toolbar"><h2>Clips</h2>
+      ${list.length > 1 ? `<select id="cam" aria-label="Camera" style="width:auto">${list.map(({ options: o }) => `<option value="${esc(o.id)}" ${o.id === camId ? "selected" : ""}>${esc(o.name || o.id)}</option>`).join("")}</select>` : ""}</div>
+    ${data.length ? "" : `<div class="card empty">No clips yet.</div>`}
+    ${data.map((c) => `<div class="card clip" data-id="${c.id}">
       ${c.post_status === "done" ? `<img class="thumb" loading="lazy" src="api/v1/clips/${c.id}/thumb" alt="" onerror="this.style.visibility='hidden'">` : `<div class="thumb" role="img" aria-label="Preparing thumbnail"></div>`}
-      <div style="flex:1"><b>${esc(c.kind)}</b> · ${esc(c.channel)} · ${when(c.start)}<br><span class="muted">${bytes(c.size)}${c.duration ? " · " + Math.round(c.duration) + " s" : ""} · ${c.copies.map((x) => esc(x.target)).join(", ")}</span></div>
-      <div><button data-a="play">Play</button> <button data-a="keep">${c.keep ? "Unkeep" : "Keep"}</button> <button data-a="del" class="danger">Delete</button></div></div>`).join("")}`;
-  $("#cam").onchange = (e) => { location.hash = "#clips?camera=" + e.target.value; };
+      <div class="meta"><div><span class="badge ${c.kind === "event" ? "warn" : ""}">${esc(c.kind)}</span> ${c.keep ? '<span class="badge info">kept</span>' : ""} <span class="muted">${esc(c.channel)}</span></div>
+        <div>${when(c.start)}</div>
+        <div class="small muted">${bytes(c.size)}${c.duration ? " · " + Math.round(c.duration) + " s" : ""} · ${c.copies.map((x) => (x.target === "local" ? "this HA" : x.target === "network" ? "disk/share" : esc(x.target))).join(", ")}</div></div>
+      <div class="actions" style="margin:0"><button data-a="play">Play</button><button class="text" data-a="keep">${c.keep ? "Unkeep" : "Keep"}</button><button class="text danger" data-a="del">Delete</button></div></div>`).join("")}`;
+  if ($("#cam")) $("#cam").onchange = (e) => { location.hash = "#clips?camera=" + e.target.value; };
   // Clips are post-processed in the background: refresh until their thumbnails exist.
-  if (data.some((c) => c.post_status === "pending") && !$("video")) timer = setTimeout(() => { if (view === "clips") clips().catch(() => {}); }, 3000);
-  main.querySelectorAll("[data-a]").forEach((b) => {
+  if (data.some((c) => c.post_status === "pending")) timer = setTimeout(() => { if (view === "clips" && !document.querySelector("dialog[open]")) clips().catch(() => {}); }, 3000);
+  $$("[data-a]", main).forEach((b) => {
     b.onclick = async () => {
-      const card = b.closest(".card"), id = card.dataset.id;
-      if (b.dataset.a === "play") $("#player").innerHTML = `<video controls autoplay src="api/v1/clips/${id}/file"></video>`;
-      else if (b.dataset.a === "keep") { await api(`clips/${id}/${b.textContent === "Keep" ? "keep" : "unkeep"}`, { method: "POST" }); clips(); }
-      else if (b.dataset.a === "del" && confirm("Delete this clip from all storage?")) { await api(`clips/${id}`, { method: "DELETE" }); clips(); }
+      const id = b.closest(".card").dataset.id, c = data.find((x) => String(x.id) === id);
+      if (b.dataset.a === "play") {
+        const d = openDialog(`${c.kind} · ${when(c.start)}`, { id: "player" });
+        d.body.innerHTML = `<video controls autoplay playsinline src="api/v1/clips/${id}/file"></video>`;
+      } else if (b.dataset.a === "keep") {
+        await act(() => api(`clips/${id}/${c.keep ? "unkeep" : "keep"}`, { method: "POST" }), c.keep ? "No longer kept" : "Kept: never deleted by retention");
+        clips();
+      } else if (b.dataset.a === "del" && await confirmDialog("Delete this clip?", "It is deleted from every storage location. This cannot be undone.", "Delete", true)) {
+        await act(() => api(`clips/${id}`, { method: "DELETE" }), "Clip deleted");
+        clips();
+      }
     };
   });
 }
+
+// ------------------------------------------------------------------ storage
 
 const BLOCKED = {
   network_not_mounted: "The network share or disk is not attached. Check it under Settings › System › Storage.",
@@ -401,23 +641,20 @@ async function storage() {
   const [s, loc] = await Promise.all([api("storage"), api("storage/location")]);
   const cur = loc.current;
   main.innerHTML = `<h2>Storage</h2>
-    <div class="card muted">Mode: <b>${esc(s.mode)}</b>${s.last_purge ? ` · last purge removed ${s.last_purge.count} copies (${bytes(s.last_purge.bytes_freed)})` : ""}</div>
-    ${Object.values(s.targets).map((t) => {
-      const used = t.total_bytes ? 100 - (100 * t.free_bytes) / t.total_bytes : 0;
-      return `<div class="card"><div class="row"><b>${esc(t.name)}</b><span class="pill ${t.online ? "ok" : "bad"}">${t.online ? "online" : esc(t.reason || "offline")}</span></div>
-        <div class="muted">${esc(t.root)}</div><div class="bar" title="${used.toFixed(0)}% used"><div style="width:${used}%"></div></div>
-        <div>Clips ${bytes(t.clip_bytes)} · free ${bytes(t.free_bytes)} of ${bytes(t.total_bytes)}</div></div>`;
-    }).join("")}
-    <div class="card">Clips are kept on <b>${esc(TARGETS[cur.target])}</b>${cur.target !== "network" ? ` · local folder <code>/media/${esc(cur.local_folder)}</code>` : ""}${cur.target !== "local" ? ` · <code>${esc(cur.network_folder)}</code>` : ""}. <a href="#settings">Change in Settings</a></div>
+    <div class="grid">${Object.values(s.targets).map(targetCard).join("")}</div>
+    <div class="card" style="margin-top:12px">Clips are kept on <b>${esc(TARGETS[cur.target])}</b>${cur.target !== "network" ? ` · local folder <code>/media/${esc(cur.local_folder)}</code>` : ""}${cur.target !== "local" ? ` · <code>${esc(cur.network_folder)}</code>` : ""}. <a href="#settings">Change in Settings</a></div>
     <div id="move"></div>
     <h2>Retention</h2>
-    <p><button id="dry">Dry run</button> <button id="purge" class="danger">Purge now</button></p>
-    <div id="purge-out"></div>`;
-  const show = (r) => { $("#purge-out").innerHTML = `<div class="card">${r.dry_run ? "Would remove" : "Removed"} <b>${r.count}</b> copies, ${bytes(r.bytes_freed)}.
+    <div class="card"><div>${s.last_purge ? `Last purge removed ${s.last_purge.count} copies (${bytes(s.last_purge.bytes_freed)}), ${ago(s.last_purge.ts ? new Date(s.last_purge.ts * 1000).toISOString() : null)}.` : "No purge has run yet."}</div>
+      <div class="actions"><button id="dry">Dry run</button><button class="text danger" id="purge">Purge now</button></div>
+      <div id="purge-out"></div></div>`;
+  const show = (r) => { $("#purge-out").innerHTML = `<div style="margin-top:12px">${r.dry_run ? "Would remove" : "Removed"} <b>${r.count}</b> copies, ${bytes(r.bytes_freed)}.
     ${r.skipped_targets.length ? `<div class="muted">Skipped (offline): ${esc(r.skipped_targets.join(", "))}</div>` : ""}
-    <table>${(r.clips || []).slice(0, 50).map((c) => `<tr><td>${esc(c.camera)}</td><td>${esc(c.kind)}</td><td>${when(c.start)}</td><td>${esc(c.target)}</td><td class="muted">${esc(c.reason)}</td></tr>`).join("")}</table></div>`; };
+    ${(r.clips || []).length ? `<div style="overflow-x:auto"><table><tr><th>Camera</th><th>Kind</th><th>Start</th><th>Where</th><th>Why</th></tr>${r.clips.slice(0, 50).map((c) => `<tr><td>${esc(c.camera)}</td><td>${esc(c.kind)}</td><td>${when(c.start)}</td><td>${esc(c.target)}</td><td class="muted">${esc(c.reason)}</td></tr>`).join("")}</table></div>` : ""}</div>`; };
   $("#dry").onclick = async () => show(await api("purge", { method: "POST", body: { dry_run: true } }));
-  $("#purge").onclick = async () => { if (confirm("Run the purge now?")) show(await api("purge", { method: "POST", body: {} })); };
+  $("#purge").onclick = async () => {
+    if (await confirmDialog("Run the purge now?", "Clips past their retention rules are deleted now instead of at the daily purge time.", "Purge now", true)) show(await api("purge", { method: "POST", body: {} }));
+  };
   drawMove(await api("storage/migration"));
 }
 
@@ -431,7 +668,7 @@ function drawMove(m) {
     box.innerHTML = `<div class="card"><div class="row"><b>Moving clips</b><button id="m-cancel">Cancel</button></div>
       <div class="bar"><div style="width:${pct}%"></div></div>
       <div>${job.clips_done} of ${job.clips_total} clips · ${bytes(job.bytes_done)} of ${bytes(job.bytes_total)}</div>
-      <div class="muted">${esc(job.current || "")}</div></div>`;
+      <div class="muted small">${esc(job.current || "")}</div></div>`;
     $("#m-cancel").onclick = async () => drawMove(await api("storage/migration", { method: "DELETE" }));
     timer = setInterval(async () => { try { drawMove(await api("storage/migration")); } catch (e) { clearInterval(timer); } }, 2000);
     return;
@@ -451,10 +688,10 @@ function drawMove(m) {
       ${plan.blocked ? `<div class="muted" id="m-blocked">${esc(BLOCKED[plan.blocked] || plan.blocked)}</div>` : ""}
       ${notes.map((n) => `<div class="muted">${n}</div>`).join("")}
       ${last ? `<div class="muted">${last}</div>` : ""}
-      <p><button id="m-start" class="primary" ${plan.blocked ? "disabled" : ""}>Move clips</button></p></div>`;
+      <div class="actions"><button id="m-start" class="primary" ${plan.blocked ? "disabled" : ""}>Move clips</button></div></div>`;
     $("#m-start").onclick = async () => {
       try { drawMove(await api("storage/migration", { method: "POST" })); }
-      catch (e) { box.insertAdjacentHTML("beforeend", `<div class="card notice bad">${esc(BLOCKED[e.message] || e.message)}</div>`); }
+      catch (e) { toast(BLOCKED[e.message] || e.message, "bad"); }
     };
     return;
   }
@@ -475,9 +712,9 @@ async function settings() {
   const names = loc.attached.map((a) => a.name);
   const netOptions = loc.attached.map((a) => `<option value="${esc(a.name)}" ${a.name === so.network_folder ? "selected" : ""}>${esc(a.name)} · ${a.kind} · ${esc(a.fstype)}</option>`).join("")
     + (so.network_folder && !names.includes(so.network_folder) ? `<option value="${esc(so.network_folder)}" selected>${esc(so.network_folder)} · not attached</option>` : "");
-  const del = so && sy.delete_from_camera ? (sy.delete_events_from_camera ? "all" : "normal") : "keep";
-  const num = (id, v, unit, hint) => `<label for="${id}">${unit}</label><input id="${id}" type="number" min="0" ${id.endsWith("min_free_percent") ? 'max="90"' : ""} step="1" required value="${v}">${hint ? `<div class="muted">${hint}</div>` : ""}`;
-  const retention = (p, title) => `<div class="card" id="${p}ret"><b>${title}</b>
+  const del = sy.delete_from_camera ? (sy.delete_events_from_camera ? "all" : "normal") : "keep";
+  const num = (id, v, unit, hint) => `<label for="${id}">${unit}</label><input id="${id}" type="number" inputmode="numeric" min="0" ${id.endsWith("min_free_percent") ? 'max="90"' : ""} step="1" required value="${v}">${hint ? `<div class="hint">${hint}</div>` : ""}`;
+  const retention = (p, title) => `<div class="card" id="${p}ret"><div class="title">${title}</div>
     <div class="grid">
       <div>${num(p + "max_total_gb", re[p + "max_total_gb"], "Size cap (GB)", "0 = no cap")}</div>
       <div>${num(p + "min_free_percent", re[p + "min_free_percent"], "Minimum free space (%)", "Oldest clips go first when below")}</div>
@@ -485,21 +722,21 @@ async function settings() {
       <div>${num(p + "parking_days", re[p + "parking_days"], "Parking clips (days)")}</div>
       <div>${num(p + "event_days", re[p + "event_days"], "Event clips (days)")}</div>
       <div>${num(p + "photo_days", re[p + "photo_days"], "Photos (days)")}</div>
-    </div><div class="muted">0 days = no age limit (kept until space is needed). Clips marked Keep are never deleted.</div></div>`;
+    </div><div class="hint">0 days = no age limit (kept until space is needed). Clips marked Keep are never deleted.</div></div>`;
   main.innerHTML = `<h2>Sync</h2>
     <div class="card">
       <label>What to download when the camera is in range</label>
-      ${Object.entries(MODES).map(([k, [t, d]]) => `<label class="choice"><input type="radio" name="s-mode" value="${k}" ${sy.mode === k ? "checked" : ""}> <b>${t}</b> <span class="muted">· ${d}</span></label>`).join("")}
-      <div class="grid"><div>${num("s-recent", sy.recent_minutes, "Recent driving to include (minutes)", "With Events first: the minutes before arrival")}</div>
+      <div class="choices">${Object.entries(MODES).map(([k, [t, d]]) => `<label class="choice"><input type="radio" name="s-mode" value="${k}" ${sy.mode === k ? "checked" : ""}><span><b>${t}</b><span class="muted">${d}</span></span></label>`).join("")}</div>
+      <div class="grid" style="margin-top:4px"><div>${num("s-recent", sy.recent_minutes, "Recent driving to include (minutes)", "With Events first: the minutes before arrival")}</div>
       <div><label for="s-del">After a verified download</label><select id="s-del">
         <option value="keep" ${del === "keep" ? "selected" : ""}>Keep everything on the camera</option>
-        <option value="normal" ${del === "normal" ? "selected" : ""}>Delete normal clips from the camera</option>
-        <option value="all" ${del === "all" ? "selected" : ""}>Delete normal and event clips from the camera</option></select>
-        <div class="muted">Locked clips stay on the card unless they are events and events are deleted too.</div></div></div>
+        <option value="normal" ${del === "normal" ? "selected" : ""}>Delete normal clips</option>
+        <option value="all" ${del === "all" ? "selected" : ""}>Delete normal and event clips</option></select>
+        <div class="hint">From the camera's card. Locked clips stay unless they are events and events are deleted too.</div></div></div>
       <details><summary>Advanced</summary>
-        <label class="choice"><input type="checkbox" id="s-remux" ${sy.remux_to_mp4 ? "checked" : ""}> Remux <code>.ts</code> to <code>.mp4</code> (no re-encoding)</label>
-        <label class="choice"><input type="checkbox" id="s-keep" ${so.keep_original ? "checked" : ""}> Keep the original <code>.ts</code> next to the <code>.mp4</code></label>
-        <label class="choice"><input type="checkbox" id="s-thumbs" ${sy.thumbnails ? "checked" : ""}> Make thumbnails</label>
+        <label class="check"><input type="checkbox" id="s-remux" ${sy.remux_to_mp4 ? "checked" : ""}> Remux <code>.ts</code> to <code>.mp4</code> (no re-encoding)</label>
+        <label class="check"><input type="checkbox" id="s-keep" ${so.keep_original ? "checked" : ""}> Keep the original <code>.ts</code> next to the <code>.mp4</code></label>
+        <label class="check"><input type="checkbox" id="s-thumbs" ${sy.thumbnails ? "checked" : ""}> Make thumbnails</label>
       </details>
     </div>
     <h2>Storage</h2>
@@ -509,27 +746,40 @@ async function settings() {
       <div id="l-local-row"><label for="l-local">Local folder (under /media)</label><input id="l-local" value="${esc(so.local_folder)}"></div>
       <div id="l-net-row">
         <label for="l-net">Disk or share</label>
-        ${netOptions ? `<select id="l-net">${netOptions}</select>` : `<div class="muted" id="l-net-none">None attached. Add a network share or a local disk (USB drive, SD card) under <a href="/config/storage" target="_top">Settings › System › Storage</a>, with usage Media or Share.</div>`}
-        <label class="choice"><input type="checkbox" id="l-spool" ${so.spool_when_network_down ? "checked" : ""}> Keep new clips locally while it is offline, and move them over when it is back</label>
+        ${netOptions ? `<select id="l-net">${netOptions}</select>` : `<div class="hint" id="l-net-none">None attached. Add a network share or a local disk (USB drive, SD card) under <a href="/config/storage" target="_top">Settings › System › Storage</a>, with usage Media or Share.</div>`}
+        <label class="check"><input type="checkbox" id="l-spool" ${so.spool_when_network_down ? "checked" : ""}> Keep new clips locally while it is offline, then move them over</label>
       </div>
-      <div class="muted">A change applies to new clips. Existing clips can be moved afterwards.</div>
+      <div class="hint" style="margin-top:12px">A change applies to new clips. Existing clips can be moved afterwards.</div>
     </div>
     <div id="move"></div>
     <h2>Retention</h2>
     ${retention("", "This Home Assistant")}
     ${retention("network_", "Disk or share")}
     <div class="card"><label for="r-time">Daily purge at</label><input id="r-time" type="time" value="${esc(re.purge_time)}"></div>
-    <p><button id="save" class="primary">Save settings</button> <span id="s-out" class="muted"></span></p>`;
-  const sync = () => {
+    <div class="savebar" id="savebar" hidden><span class="status" id="s-out">Unsaved changes</span>
+      <button class="text" id="discard" disabled>Discard</button><button id="save" class="primary" disabled>Save</button></div>`;
+  const vis = () => {
     const t = $("#l-target").value;
     $("#l-net-row").hidden = t === "local";
     $("#l-local-row").hidden = t === "network";
     $("#ret").hidden = t === "network";
     $("#network_ret").hidden = t === "local";
   };
-  $("#l-target").onchange = sync; sync();
+  const snapshot = () => JSON.stringify($$("input, select", main).map((el) => (el.type === "checkbox" || el.type === "radio" ? el.checked : el.value)));
+  let clean = snapshot();
+  const dirty = () => {
+    const changed = snapshot() !== clean;
+    $("#savebar").classList.toggle("dirty", changed);
+    if (changed) $("#savebar").hidden = false;
+    $("#save").disabled = $("#discard").disabled = !changed;
+    if (changed) $("#s-out").textContent = "Unsaved changes";
+  };
+  main.oninput = dirty;
+  main.onchange = () => { vis(); dirty(); };
+  $("#l-target").onchange = vis; vis();
+  $("#discard").onclick = () => settings();
   $("#save").onclick = async () => {
-    const bad = [...main.querySelectorAll("input")].find((el) => !el.closest("[hidden]") && !el.checkValidity());
+    const bad = $$("input", main).find((el) => !el.closest("[hidden]") && !el.checkValidity());
     if (bad) {
       const label = main.querySelector(`label[for="${bad.id}"]`)?.textContent || bad.id;
       $("#s-out").innerHTML = `<span class="bad-text">${esc(label)}: ${esc(bad.validationMessage)}</span>`;
@@ -552,19 +802,41 @@ async function settings() {
     };
     if ($("#l-net")) body.storage.network_folder = $("#l-net").value;
     for (const p of ["", "network_"]) for (const k of ["max_total_gb", "min_free_percent", "normal_days", "parking_days", "event_days", "photo_days"]) body.retention[p + k] = n(p + k);
+    $("#save").disabled = true;
     try {
       const r = await api("settings", { method: "PATCH", body });
+      clean = snapshot(); dirty();
       $("#s-out").textContent = "Saved.";
+      setTimeout(() => { if (snapshot() === clean && $("#savebar")) $("#savebar").hidden = true; }, 2500);
+      toast("Settings saved");
       if (r.migration) drawMove(r.migration);
-    } catch (e) { $("#s-out").innerHTML = `<span class="bad-text">${esc(e.message)}</span>`; }
+    } catch (e) { $("#save").disabled = false; $("#s-out").innerHTML = `<span class="bad-text">${esc(e.message)}</span>`; }
   };
   drawMove(await api("storage/migration"));
 }
 
+// ------------------------------------------------------------------ logs
+
 async function logs() {
-  const draw = async () => { const r = await api("logs?lines=400"); main.innerHTML = `<h2>Logs</h2><pre>${esc(r.lines.join("\n"))}</pre>`; };
+  main.innerHTML = `<div class="toolbar"><h2>Logs</h2><label class="check" style="margin:0"><input type="checkbox" id="follow" checked> Follow</label></div>
+    <div class="card" style="padding:12px"><pre id="log"></pre></div>`;
+  let last = "";
+  const draw = async () => {
+    const r = await api("logs?lines=400");
+    const text = r.lines.join("\n");
+    if (text === last) return;
+    last = text;
+    const pre = $("#log");
+    if (!pre) return;
+    pre.textContent = text;
+    if ($("#follow").checked) pre.scrollTop = pre.scrollHeight;
+  };
   await draw();
   timer = setInterval(() => draw().catch(() => {}), 5000);
 }
 
+// ------------------------------------------------------------------ start
+
+inheritTheme();
+api("info").then((i) => { $("#version").textContent = `Dashcam Sync ${i.app_version}`; }).catch(() => {});
 render();

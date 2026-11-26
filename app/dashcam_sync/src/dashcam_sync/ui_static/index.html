@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Dashcam Sync</title>
 <link rel="stylesheet" href="static/style.css">
 </head>
@@ -18,7 +18,9 @@
     <a href="#logs">Logs</a>
   </nav>
 </header>
-<main id="main" aria-live="polite">Loading…</main>
+<main id="main" aria-live="polite"><div class="empty"><span class="spinner"></span></div></main>
+<footer id="version"></footer>
+<div id="toast" role="status" aria-live="polite" hidden></div>
 <script src="static/app.js"></script>
 </body>
 </html>
