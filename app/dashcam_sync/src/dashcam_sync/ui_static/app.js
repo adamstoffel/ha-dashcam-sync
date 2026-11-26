@@ -644,7 +644,7 @@ async function clips() {
       <div class="meta"><div><span class="badge ${c.kind === "event" ? "warn" : ""}">${esc(c.kind)}</span> ${c.keep ? '<span class="badge info">kept</span>' : ""} <span class="muted">${esc(c.channel)}</span></div>
         <div>${when(c.start)}</div>
         <div class="small muted">${bytes(c.size)}${c.duration ? " · " + Math.round(c.duration) + " s" : ""} · ${c.copies.map((x) => (x.target === "local" ? "this HA" : x.target === "network" ? "disk/share" : esc(x.target))).join(", ")}</div></div>
-      <div class="actions" style="margin:0"><button data-a="play">Play</button><button class="text" data-a="keep">${c.keep ? "Unkeep" : "Keep"}</button><button class="text danger" data-a="del">Delete</button></div></div>`).join("")}`;
+      <div class="actions" style="margin:0"><button data-a="play">${c.kind === "photo" || /\.(jpe?g|png)$/i.test(c.path || "") ? "View" : "Play"}</button><button class="text" data-a="keep">${c.keep ? "Unkeep" : "Keep"}</button><button class="text danger" data-a="del">Delete</button></div></div>`).join("")}`;
   if ($("#cam")) $("#cam").onchange = (e) => { location.hash = "#clips?camera=" + e.target.value; };
   // Clips are post-processed in the background: refresh until their thumbnails exist.
   if (data.some((c) => c.post_status === "pending")) timer = setTimeout(() => { if (view === "clips" && !document.querySelector("dialog[open]")) clips().catch(() => {}); }, 3000);
@@ -653,7 +653,10 @@ async function clips() {
       const id = b.closest(".card").dataset.id, c = data.find((x) => String(x.id) === id);
       if (b.dataset.a === "play") {
         const d = openDialog(`${c.kind} · ${when(c.start)}`, { id: "player" });
-        d.body.innerHTML = `<video controls autoplay playsinline src="api/v1/clips/${id}/file"></video>`;
+        const photo = c.kind === "photo" || /\.(jpe?g|png)$/i.test(c.path || "");
+        d.body.innerHTML = photo
+          ? `<img class="photo" src="api/v1/clips/${id}/file" alt="Photo, ${esc(when(c.start))}">`
+          : `<video controls autoplay playsinline src="api/v1/clips/${id}/file"></video>`;
       } else if (b.dataset.a === "keep") {
         await act(() => api(`clips/${id}/${c.keep ? "unkeep" : "keep"}`, { method: "POST" }), c.keep ? "No longer kept" : "Kept: never deleted by retention");
         clips();

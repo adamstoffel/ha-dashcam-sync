@@ -222,6 +222,8 @@ async def test_viidure_sgk_firmware(session: aiohttp.ClientSession) -> None:
             "20261126105248.ts",
             "20261126105300.jpg",
         ]
+        # The photo, also answered for "emr", is listed once and stays a photo.
+        assert [r.kind for r in recs if r.path.endswith(".jpg")] == [Kind.PHOTO]
         rec = next(r for r in recs if r.kind is Kind.NORMAL)
         assert rec.path == "/EMMC/Normal/F/20261126105248.ts"
         assert drv.url_path(rec) == "/EMMC/Normal/F/20261126105248.ts"

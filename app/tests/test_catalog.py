@@ -105,3 +105,22 @@ def test_file_backed_catalog_survives_reopen(tmp_path: Path) -> None:
     again = Catalog(path)
     assert again.get_clip(row.id) is not None
     again.close()
+
+
+def test_a_downloaded_clip_gets_its_type_corrected_and_its_verified_size() -> None:
+    import datetime as dt
+
+    from dashcam_sync.catalog import Catalog
+    from dashcam_sync.models import Kind, Recording
+
+    cat = Catalog(":memory:")
+    start = dt.datetime(2026, 11, 25, 10, 23, 15, tzinfo=dt.UTC)
+    listed = Recording("EMMC/Photo/F/x.jpg", 0, start, Kind.EVENT, approx_size=73400)
+    row, _ = cat.upsert_recording("car", listed)
+    cat.complete_clip(row.id, sha256="0" * 64, target="local", path="/m/x.jpg", size=325210)
+    assert cat.get_clip(row.id).size == 325210  # the verified size, not the listed one
+    assert cat.is_known_done("car", listed)
+    cat.refresh_kind("car", Recording("EMMC/Photo/F/x.jpg", 0, start, Kind.PHOTO))
+    clip = cat.get_clip(row.id)
+    assert clip.kind == "photo" and not clip.locked
+    cat.close()

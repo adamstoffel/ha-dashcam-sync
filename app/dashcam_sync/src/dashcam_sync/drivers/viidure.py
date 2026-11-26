@@ -129,9 +129,15 @@ class ViidureDriver(BaseDriver):
 
     async def list_recordings(self) -> list[Recording]:
         recs: list[Recording] = []
+        seen: set[str] = set()
         for folder in FOLDERS:
             try:
-                recs.extend(await self._list_folder(folder))
+                # Firmware without a folder may answer with another folder's files:
+                # each file is kept once, typed by its own path (see _kind_for).
+                for rec in await self._list_folder(folder):
+                    if rec.path not in seen:
+                        seen.add(rec.path)
+                        recs.append(rec)
             except ProtocolError as err:
                 if folder == REQUIRED_FOLDER:
                     raise
@@ -171,7 +177,7 @@ class ViidureDriver(BaseDriver):
             size = int(item.get("size", 0))
         except (TypeError, ValueError):
             return None
-        kind = FOLDERS.get(folder, Kind.NORMAL)
+        kind = _kind_for(folder, path)
         _, channel, locked = classify(path)
         if kind is Kind.EVENT:
             locked = True
@@ -219,6 +225,25 @@ def _without_clip_being_recorded(recs: list[Recording]) -> list[Recording]:
         return recs
     newest = max(r.start for r in loop)
     return [r for r in recs if not (r.kind is Kind.NORMAL and r.start == newest)]
+
+
+_NORMAL_DIRS = {"normal", "loop", "movie"}
+
+
+def _kind_for(folder: str, path: str) -> Kind:
+    """The file's own path wins over the folder it was listed under.
+
+    SGK firmware answers a folder it does not have (``emr``) with the photo list,
+    so a photo would be filed as an event. A ``.jpg`` or a ``Photo/`` path is a
+    photo, an event or parking path is that, and ``Normal/`` is loop recording.
+    """
+    by_path, _, _ = classify(path)
+    if by_path is not Kind.NORMAL:
+        return by_path
+    dirs = {p.lower() for p in path.replace("\\", "/").split("/")[:-1]}
+    if dirs & _NORMAL_DIRS:
+        return Kind.NORMAL
+    return FOLDERS.get(folder, Kind.NORMAL)
 
 
 def _approx_bytes(listed: int, kind: Kind) -> int:

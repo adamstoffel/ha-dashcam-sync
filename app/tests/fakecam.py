@@ -336,8 +336,10 @@ class FakeCamera:
             )
         if path in ("/app/playback", "/app/setparamvalue", "/app/getrecduration"):
             return web.Response(status=404)
-        if path == "/app/getfilelist" and folder in ("emr", "event"):
+        if path == "/app/getfilelist" and folder == "event":
             return web.json_response({"result": -1})
+        if path == "/app/getfilelist" and folder == "emr":
+            folder = "photo"  # the real camera answers a folder it lacks with the photos
         if path == "/app/getfilelist" and folder == "park":
             return web.Response(status=404)
         if path == "/app/getfilelist":

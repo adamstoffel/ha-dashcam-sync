@@ -250,6 +250,17 @@ class Catalog:
             row = self._conn.execute(f"SELECT status FROM clips WHERE {where}", args).fetchone()
         return row is not None and row["status"] in ("done", "deleted")
 
+    def refresh_kind(self, camera: str, rec: Recording) -> None:
+        """Correct the type of an already downloaded clip when the driver now knows better."""
+        where, args = self._identity(camera, rec)
+        with self._tx() as conn:
+            row = conn.execute(f"SELECT id, kind FROM clips WHERE {where}", args).fetchone()
+            if row is not None and row["kind"] != rec.kind.value:
+                conn.execute(
+                    "UPDATE clips SET kind=?, locked=? WHERE id=?",
+                    (rec.kind.value, int(rec.locked), row["id"]),
+                )
+
     def get_clip(self, clip_id: int) -> ClipRow | None:
         with self._lock:
             row = self._conn.execute("SELECT * FROM clips WHERE id=?", (clip_id,)).fetchone()
@@ -293,8 +304,9 @@ class Catalog:
         now = time.time()
         with self._tx() as conn:
             conn.execute(
-                # A clip listed without a trustworthy size gets its verified size here.
-                "UPDATE clips SET size=CASE WHEN size=0 THEN ? ELSE size END, status='done',"
+                # The verified size: equal to the listed one when that is trustworthy,
+                # and the real size for firmware that lists something else.
+                "UPDATE clips SET size=?, status='done',"
                 " sha256=?, part_path=NULL, done_ts=?, error=NULL WHERE id=?",
                 (size, sha256, now, clip_id),
             )
