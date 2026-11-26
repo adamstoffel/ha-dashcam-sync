@@ -193,6 +193,7 @@ class SessionStats:
     clips: int = 0
     bytes: int = 0
     failures: int = 0
+    resumed: int = 0
     result: str = "ok"
     error: str | None = None
 
@@ -490,6 +491,7 @@ class CameraWorker:
             except ProtocolError as err:
                 stats.result, stats.error = "list_failed", str(err)
                 raise
+            self._drop_vanished_partials(recs)
             await self._download_all(driver, recs, stats)
         except UnsupportedCamera as err:
             stats.result, stats.error = "unsupported", str(err)
@@ -522,6 +524,16 @@ class CameraWorker:
     def _finish(self, session_id: int, driver: BaseDriver | None, stats: SessionStats) -> None:
         self.ctx.catalog.end_session(
             session_id, stats.result, stats.clips, stats.bytes, stats.error
+        )
+        _LOGGER.info(
+            "%s: session %s: %d clip(s), %.1f MB, %d resumed, %d failed%s",
+            self.camera.id,
+            stats.result,
+            stats.clips,
+            stats.bytes / 1e6,
+            stats.resumed,
+            stats.failures,
+            f" ({stats.error})" if stats.error else "",
         )
         status = self.status
         status.current_file = None
@@ -606,6 +618,31 @@ class CameraWorker:
             stats.result = "partial"
             stats.error = f"{stats.failures} clip(s) failed"
 
+    def _drop_vanished_partials(self, recs: list[Recording]) -> None:
+        """Delete partial downloads of clips the camera no longer lists.
+
+        A loop-recording camera overwrites its oldest files, so a clip interrupted
+        on an earlier visit can be gone by the next one. Nothing can ever finish it,
+        yet the catalogue keeps referencing its partial file, so it would sit on the
+        disk for good. An empty listing is not trusted: that is more likely a glitch
+        than a camera with nothing on it.
+        """
+        if not recs:
+            return
+        catalog = self.ctx.catalog
+        for row in catalog.unfinished_not_listed(self.camera.id, recs):
+            if not row.offset and not row.part_path:
+                continue
+            if row.part_path:
+                Path(row.part_path).unlink(missing_ok=True)
+            catalog.reset_clip(row.id)
+            _LOGGER.info(
+                "%s: %s is no longer on the camera; dropped its %d-byte partial download",
+                self.camera.id,
+                row.src_path,
+                row.offset,
+            )
+
     def _learn_size(self, clip_id: int, stream: ByteStream) -> None:
         """Replace a clip's estimated size by what the download says, for progress."""
         actual = stream.total
@@ -656,8 +693,18 @@ class CameraWorker:
                 fh.flush()
                 os.fsync(fh.fileno())
             await self._place_part(driver, rec, row, dest, part, stats)
+            stats.resumed += 1
+            _LOGGER.info(
+                "%s: finished %s after a resume (all %d bytes were already saved)",
+                self.camera.id,
+                rec.path,
+                offset,
+            )
             return
         self._learn_size(row.id, stream)
+        resumed_at = offset if offset > 0 and stream.start == offset else 0
+        if resumed_at:
+            _LOGGER.info("%s: resuming %s at byte %d", self.camera.id, rec.path, resumed_at)
         try:
             if stream.start != offset:
                 # The camera ignored Range and answered 200: start over.
@@ -702,6 +749,14 @@ class CameraWorker:
             # Keep the partial file and its offset: the next visit resumes it.
             with contextlib.suppress(Exception):
                 await stream.aclose()
+            saved = catalog.get_clip(row.id)
+            if saved is not None and saved.offset > 0:
+                _LOGGER.info(
+                    "%s: kept %d bytes of %s; it resumes on the next visit",
+                    self.camera.id,
+                    saved.offset,
+                    rec.path,
+                )
             raise
         await stream.aclose()
 
@@ -732,6 +787,15 @@ class CameraWorker:
         if expected is None:
             await self._confirm_end(driver, rec, size)
         await self._place_part(driver, rec, row, dest, part, stats)
+        if resumed_at:
+            stats.resumed += 1
+            _LOGGER.info(
+                "%s: finished %s after a resume (%d bytes, resumed at %d)",
+                self.camera.id,
+                rec.path,
+                size,
+                resumed_at,
+            )
 
     async def _place_part(
         self,

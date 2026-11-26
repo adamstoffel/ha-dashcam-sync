@@ -7,6 +7,7 @@ and the next visit finishes the download without fetching bytes twice.
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 from collections.abc import AsyncIterator
@@ -554,3 +555,58 @@ async def _listing(env: Env) -> list:  # type: ignore[type-arg]
         drv = ViidureDriver(CameraHttp(s))
         drv.attach(env.cam.host)
         return await drv.list_recordings()
+
+
+# ------------------------------------------------- resume is visible; vanished clips
+
+
+async def test_a_resume_is_logged_and_counted(env: Env, caplog: pytest.LogCaptureFixture) -> None:
+    """Someone reading the app log can tell that a clip was resumed, not refetched."""
+    env.cam.faults.drop_after = 30_000
+    with caplog.at_level(logging.INFO, logger="dashcam_sync.engine"):
+        first = await env.session()
+        env.cam.faults.drop_after = None
+        second = await env.session()
+    assert first.result == "link_lost" and first.resumed == 0
+    assert second.result == "ok" and second.resumed == 1
+    text = caplog.text
+    assert "kept 30000 bytes of" in text and "resumes on the next visit" in text
+    assert "resuming" in text and "at byte 30000" in text
+    assert "after a resume" in text
+    assert "session link_lost: 0 clip(s)" in text and "session ok: 2 clip(s)" in text
+    assert "1 resumed" in text
+
+
+async def test_partial_of_a_clip_the_camera_deleted_is_dropped(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A loop-recording camera overwrites old files; their partials must not pile up."""
+    env.cam.faults.drop_after = 30_000
+    await env.session()
+    env.cam.faults.drop_after = None
+    interrupted = [c for c in env.catalog.unfinished("car") if c.offset > 0]
+    assert len(interrupted) == 1
+    part = Path(interrupted[0].part_path or "")
+    assert part.exists()
+
+    gone = interrupted[0].src_path.replace("\\", "/").rsplit("/", 1)[-1]
+    env.cam.files = [f for f in env.cam.files if gone not in f.path]
+    with caplog.at_level(logging.INFO, logger="dashcam_sync.engine"):
+        second = await env.session()
+    assert second.result == "ok" and second.clips == 1  # only the clip still there
+    assert not part.exists()
+    row = env.catalog.get_clip(interrupted[0].id)
+    assert row is not None and row.offset == 0 and row.part_path is None
+    assert "is no longer on the camera; dropped its 30000-byte partial" in caplog.text
+    assert not list((env.media / "dashcam_sync" / ".partial").glob("*.part"))
+
+
+async def test_an_empty_listing_does_not_discard_partials(env: Env) -> None:
+    """No clips at all is more likely a glitch than an empty card: keep what was fetched."""
+    env.cam.faults.drop_after = 30_000
+    await env.session()
+    env.cam.faults.drop_after = None
+    part = Path(next(c for c in env.catalog.unfinished("car") if c.offset > 0).part_path or "")
+    env.cam.files = []
+    await env.session()
+    assert part.exists()
