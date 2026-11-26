@@ -1,4 +1,6 @@
 # pip install pre-commit && pre-commit install
+# Vendored third-party skills stay byte-for-byte as upstream (see .claude/skills/README.md).
+exclude: ^\.claude/skills/
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.8.6
