@@ -424,9 +424,20 @@ class StorageManager:
 
     # ----------------------------------------------------------------- placing
 
-    def place(self, camera_id: str, rec: Recording, part: Path, dest: Destination) -> Path:
+    def final_path(self, camera_id: str, rec: Recording, dest: Destination) -> Path:
+        """Where ``place`` will put the clip: its layout path, or a free name next to it."""
+        return unique_path(dest.target.root / clip_relative_path(camera_id, rec))
+
+    def place(
+        self,
+        camera_id: str,
+        rec: Recording,
+        part: Path,
+        dest: Destination,
+        final: Path | None = None,
+    ) -> Path:
         """Atomically move a verified ``.part`` file to its final place."""
-        final = unique_path(dest.target.root / clip_relative_path(camera_id, rec))
+        final = final or self.final_path(camera_id, rec, dest)
         move_file(part, final)
         return final
 

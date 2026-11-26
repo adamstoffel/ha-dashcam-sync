@@ -573,3 +573,7 @@ class Catalog:
             self._conn.execute(
                 "INSERT OR REPLACE INTO kv (key, value) VALUES (?,?)", (key, json.dumps(value))
             )
+
+    def kv_delete(self, key: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM kv WHERE key=?", (key,))

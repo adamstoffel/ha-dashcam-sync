@@ -462,3 +462,95 @@ def test_a_same_size_file_with_other_bytes_is_not_reused(tmp_path: Path) -> None
     assert reuse_or_unique(dst, src) != dst  # another clip: never overwritten
     dst.write_bytes(b"a" * 100)
     assert reuse_or_unique(dst, src) == dst  # a finished copy of this clip: reused
+
+
+async def test_a_416_recovery_drops_bytes_written_after_the_last_checkpoint(
+    tmp_path: Path, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The part holds junk past the saved offset (a crash between write and checkpoint)."""
+    env, cam = await _sgk_env(tmp_path, session)
+    try:
+        storage = env.storage
+        real_place = storage.place
+
+        def fail_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+            monkeypatch.setattr(storage, "place", real_place)
+            raise OSError("disk hiccup")
+
+        monkeypatch.setattr(storage, "place", fail_once)
+        await env.session()
+        [row] = [c for c in env.catalog.unfinished("car") if c.offset]
+        with Path(row.part_path).open("ab") as fh:  # type: ignore[arg-type]
+            fh.write(b"crash tail")
+        await env.session()
+        [clip] = env.catalog.list_clips(camera="car")
+        copy = env.catalog.copy(clip.id, TARGET_LOCAL)
+        assert copy is not None
+        assert Path(copy.path).read_bytes() == cam.files[0].data  # tail dropped
+    finally:
+        await _close(env, cam)
+
+
+async def test_an_end_confirmation_416_stating_another_size_is_refused(
+    tmp_path: Path, session: aiohttp.ClientSession
+) -> None:
+    from dashcam_sync.errors import NothingBeyond, ProtocolError
+
+    env = make_env(tmp_path, session, FakeCamera("viidure"))
+
+    class Driver:
+        async def open(self, rec: object, offset: int) -> object:
+            raise NothingBeyond("past the end", total=50)
+
+    with pytest.raises(ProtocolError, match="50 bytes"):
+        await env.worker._confirm_end(Driver(), None, 100)  # type: ignore[arg-type]
+
+    class Agrees:
+        async def open(self, rec: object, offset: int) -> object:
+            raise NothingBeyond("past the end", total=100)
+
+    await env.worker._confirm_end(Agrees(), None, 100)  # type: ignore[arg-type]
+    env.catalog.close()
+
+
+async def test_a_crash_after_placing_under_a_suffixed_name_adopts_that_file(
+    tmp_path: Path, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The layout name was taken, so the clip went to ``_2``: recovery must find it."""
+    from dashcam_sync.storage import clip_relative_path
+
+    env, cam = await _sgk_env(tmp_path, session)
+    try:
+        listed = [r for r in await _listing(env) if r.path.endswith("113926.ts")]
+        target = env.media / "dashcam_sync" / clip_relative_path("car", listed[0])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"someone else's file")
+        real = env.catalog.complete_clip
+
+        def crash_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+            monkeypatch.setattr(env.catalog, "complete_clip", real)
+            raise OSError("power cut")
+
+        monkeypatch.setattr(env.catalog, "complete_clip", crash_once)
+        await env.session()
+        downloads = len([r for r in cam.requests if r.endswith(".ts")])
+        await env.session()
+        assert recorded(env) == 1
+        assert len([r for r in cam.requests if r.endswith(".ts")]) == downloads  # adopted
+        [clip] = env.catalog.list_clips(camera="car")
+        copy = env.catalog.copy(clip.id, TARGET_LOCAL)
+        assert copy is not None and "_2." in Path(copy.path).name
+        assert not [p for p in final_files(env) if "_3." in p.name]
+        assert target.read_bytes() == b"someone else's file"  # untouched
+    finally:
+        await _close(env, cam)
+
+
+async def _listing(env: Env) -> list:  # type: ignore[type-arg]
+    from dashcam_sync.drivers import ViidureDriver
+    from dashcam_sync.drivers.http import CameraHttp
+
+    async with aiohttp.ClientSession() as s:
+        drv = ViidureDriver(CameraHttp(s))
+        drv.attach(env.cam.host)
+        return await drv.list_recordings()

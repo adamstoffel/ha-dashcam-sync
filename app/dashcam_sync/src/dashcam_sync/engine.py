@@ -649,6 +649,12 @@ class CameraWorker:
             if any(v is not None and v != offset for v in claims.values()):
                 self._discard(part, row)
                 raise ProtocolError(f"the saved part ({offset} bytes) disagrees: {claims}") from err
+            # Only the bytes up to the saved offset are confirmed: drop any written after
+            # the last checkpoint before a crash.
+            with part.open("r+b") as fh:
+                fh.truncate(offset)
+                fh.flush()
+                os.fsync(fh.fileno())
             await self._place_part(driver, rec, row, dest, part, stats)
             return
         self._learn_size(row.id, stream)
@@ -738,11 +744,15 @@ class CameraWorker:
     ) -> None:
         """Hash, place and record a verified part file."""
         digest = await asyncio.to_thread(_sha256, part)
-        # Saved first, so a crash after placing can still adopt the file when the
-        # listing gives no trustworthy size (see _adopt_placed).
+        storage = self.ctx.storage()
+        # Saved first, so a crash after placing can still adopt the file: its verified
+        # size (the listing may give none) and the exact name chosen (it may be a _2).
         self.ctx.catalog.set_verified_size(row.id, part.stat().st_size)
-        final = self.ctx.storage().place(self.camera.id, rec, part, dest)
+        final = storage.final_path(self.camera.id, rec, dest)
+        self.ctx.catalog.kv_set(_placing_key(row.id), str(final))
+        final = storage.place(self.camera.id, rec, part, dest, final)
         await self._complete(driver, rec, row, dest, final, digest, stats)
+        self.ctx.catalog.kv_delete(_placing_key(row.id))
 
     async def _complete(
         self,
@@ -771,8 +781,14 @@ class CameraWorker:
         """
         try:
             probe = await driver.open(rec, size)
-        except NothingBeyond:
-            return  # 416: nothing after the last byte we have
+        except NothingBeyond as err:
+            # 416: nothing at or after our last byte. That proves the end only when any
+            # size it states is ours (bytes */N with N == size).
+            if err.total is not None and err.total != size:
+                raise ProtocolError(
+                    f"the camera says the file has {err.total} bytes, we have {size}"
+                ) from err
+            return
         try:
             if probe.range_honored and probe.start == size:
                 async for chunk in probe:
@@ -790,7 +806,10 @@ class CameraWorker:
         size = rec.size or row.size  # row.size: the verified size saved before placing
         if not row.part_path or Path(row.part_path).exists() or not size:
             return None
-        candidate = dest.target.root / clip_relative_path(self.camera.id, rec)
+        placing = self.ctx.catalog.kv_get(_placing_key(row.id))
+        candidate = (
+            Path(placing) if placing else dest.target.root / clip_relative_path(self.camera.id, rec)
+        )
         try:
             if candidate.stat().st_size != size:
                 return None
@@ -848,3 +867,8 @@ __all__ = [
     "Timing",
     "build_queue",
 ]
+
+
+def _placing_key(clip_id: int) -> str:
+    """Catalogue key holding the exact path a clip is being placed at."""
+    return f"placing:{clip_id}"
