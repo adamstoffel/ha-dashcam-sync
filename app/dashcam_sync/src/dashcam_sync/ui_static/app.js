@@ -13,7 +13,13 @@ const api = async (path, opts = {}) => {
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 };
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// HTML-escape, as a plain replace chain: the form static analysers (CodeQL) recognise as escaping.
+const esc = (s) => String(s ?? "")
+  .replace(/&/g, "&amp;")
+  .replace(/</g, "&lt;")
+  .replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;")
+  .replace(/'/g, "&#39;");
 const NUM = [new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }), new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 })];
 const bytes = (n) => {
   if (n == null) return "–";
