@@ -49,7 +49,7 @@ class DashcamSyncEntity(CoordinatorEntity[DashcamSyncCoordinator]):
                 manufacturer="Dashcam Sync",
                 model=status.get("model") or status.get("driver"),
                 sw_version=status.get("firmware"),
-                via_device=(DOMAIN, entry.entry_id),
+                via_device_id=entry.runtime_data.hub_device_id,
             )
 
     @property

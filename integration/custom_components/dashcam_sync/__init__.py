@@ -91,8 +91,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry) 
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = DashcamSyncRuntimeData(api=api, coordinator=coordinator)
 
-    # Camera devices point at the hub with via_device, so the hub must exist first.
-    dr.async_get(hass).async_get_or_create(
+    # Camera devices point at the hub with via_device_id, so the hub must exist first.
+    hub = dr.async_get(hass).async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, entry.entry_id)},
         name="Dashcam Sync",
@@ -100,6 +100,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry) 
         model="Dashcam Sync app",
         sw_version=coordinator.hub.get("app_version"),
     )
+    entry.runtime_data.hub_device_id = hub.id
 
     issues = IssueSync(hass, entry)
     entry.runtime_data.cleanups.append(issues.async_clear)

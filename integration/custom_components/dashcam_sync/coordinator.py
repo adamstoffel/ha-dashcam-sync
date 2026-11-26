@@ -290,3 +290,4 @@ class DashcamSyncRuntimeData:
     api: DashcamSyncApi
     coordinator: DashcamSyncCoordinator
     cleanups: list[Callable[[], None]] = field(default_factory=list)
+    hub_device_id: str | None = None
