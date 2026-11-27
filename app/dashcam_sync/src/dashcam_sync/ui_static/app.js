@@ -404,7 +404,7 @@ async function cameraDetail(id) {
 
 // ------------------------------------------------------------------ setup wizard
 
-const LIKELY_CAMERA = /cardv|dash|dvr|cam|viofo|70mai|vantrue|blackvue|nextbase|thinkware|garmin|redtiger|azdome|rexing|wolfbox|ddpai|dc[-_ ]?\w*$/i;
+const LIKELY_CAMERA = /cardv|dash|dvr|cam|viofo|70mai|vantrue|blackvue|nextbase|thinkware|garmin|redtiger|azdome|rexing|wolfbox|ddpai|(?:dc[-_ ]?\w*$)/i;
 
 async function wizard(existing) {
   const edit = !!existing;
