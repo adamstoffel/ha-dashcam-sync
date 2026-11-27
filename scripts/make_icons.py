@@ -85,7 +85,7 @@ def logo(width: int, height: int) -> Image.Image:
 
 def main() -> None:
     app = ROOT / "app" / "dashcam_sync"
-    brand = ROOT / "integration" / "custom_components" / "dashcam_sync" / "brand"
+    brand = ROOT / "custom_components" / "dashcam_sync" / "brand"
     brand.mkdir(parents=True, exist_ok=True)
     glyph(128).save(app / "icon.png")
     logo(250, 100).save(app / "logo.png")

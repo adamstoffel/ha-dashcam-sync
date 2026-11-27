@@ -2,7 +2,7 @@
 """Guard: every Home Assistant name the integration imports must exist in the HA we support.
 
 The integration's tests run against whichever Home Assistant test package CI can install,
-which can be older than ``homeassistant`` in ``integration/hacs.json``. A helper that was
+which can be older than ``homeassistant`` in ``hacs.json``. A helper that was
 removed in between passes every test and then fails to load on a real install ("cannot
 import name ..." when the config flow is loaded). This downloads the Home Assistant wheel
 for the minimum supported version (or any version given on the command line, ``latest``
@@ -27,8 +27,8 @@ from collections.abc import Iterator
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCES = [ROOT / "integration" / "custom_components", ROOT / "integration" / "tests"]
-HACS = ROOT / "integration" / "hacs.json"
+SOURCES = [ROOT / "custom_components", ROOT / "integration" / "tests"]
+HACS = ROOT / "hacs.json"
 
 # Home Assistant now uses Python 3.14 syntax (``except A, B:``); older parsers need parentheses.
 _BARE_EXCEPT = re.compile(r"^(\s*)except(\*?) ([^:(\n]+,[^:\n]+):", re.MULTILINE)

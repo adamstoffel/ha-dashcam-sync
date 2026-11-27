@@ -174,7 +174,7 @@ async def test_options_general(hass: HomeAssistant, loaded: MockConfigEntry) -> 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert loaded.options == {CONF_PRESENCE_ENTITY: "device_tracker.car", CONF_LIVE_CAMERA: False}
     await hass.async_block_till_done()  # the update listener reloaded the entry
-    live = hass.states.get("camera.polestar_2_live")
+    live = hass.states.get("camera.family_car_live")
     assert live is None or live.state == "unavailable"  # live camera no longer provided
 
 
@@ -184,7 +184,7 @@ async def start_wifi(hass: HomeAssistant, entry: MockConfigEntry) -> dict:
         result["flow_id"], {"next_step_id": "wifi"}
     )
     return await hass.config_entries.options.async_configure(
-        result["flow_id"], {"camera": "polestar_2"}
+        result["flow_id"], {"camera": "family_car"}
     )
 
 
@@ -285,13 +285,13 @@ async def test_wifi_without_hotspot_cameras_or_app(
     )
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "no_hotspot_cameras"
 
-    fake_api.options = {"cameras": [{"id": "polestar_2", "connection": "hotspot"}]}
+    fake_api.options = {"cameras": [{"id": "family_car", "connection": "hotspot"}]}
     result = await hass.config_entries.options.async_init(loaded.entry_id)
     result = await hass.config_entries.options.async_configure(
         result["flow_id"], {"next_step_id": "wifi"}
     )
     fake_api.error = DashcamSyncConnectionError("down")
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"camera": "polestar_2"}
+        result["flow_id"], {"camera": "family_car"}
     )
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "app_unavailable"

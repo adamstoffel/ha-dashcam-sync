@@ -2,7 +2,11 @@
 
 All notable changes to the integration and the app. Both are released together with the same CalVer version (`YYYY.M.patch`).
 
-## Unreleased
+## 2026.11.0b1 (first public beta)
+
+The first public release, as a beta: tested end to end in CI and on one real camera (see the README's *What has and has not been verified*). It includes everything below, down to the initial build.
+
+- One repository for both install paths: add it as an app repository for the app, and to HACS as a custom repository for the integration (the integration moved to `custom_components/` at the root, with `hacs.json` and `repository.yaml` beside it). CI now runs the HACS action.
 
 - Integration tests now run on Python 3.14 against Home Assistant 2026.10 (newest test package), like Home Assistant itself; they ran against 2026.2 before. That surfaced API changes, now adopted: schemas use `probatio` (Home Assistant's validation engine), camera devices link to the hub with `via_device_id` (the tuple form is deprecated for 2027.8), constants are imported from their `const` modules, and repairs flows return `RepairsFlowResult`.
 - The network check probes each address once and the point-to-point candidates in parallel, so picking an address stays well inside the integration's request timeout even when several are taken. `install-on-ha.sh` versions carry seconds and always exceed the installed version, so two installs in the same minute still rebuild.
@@ -41,7 +45,7 @@ All notable changes to the integration and the app. Both are released together w
 - App: an optional **Integration token** option, so the integration can be added by hand when discovery does not appear (the previous instructions pointed at a token that was never logged). The token is never logged; the log now says when discovery was offered.
 - Tests: two timing assumptions removed (the WebSocket snapshot reply could be preceded by another push; the Novatek heartbeat test assumed a fixed delay).
 
-## 2026.11.0
+### Initial build
 
 First version. See `app/dashcam_sync/CHANGELOG.md` for the app side.
 

@@ -89,7 +89,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Zip the integration
-        run: cd integration/custom_components/dashcam_sync && zip -r ../../../dashcam_sync.zip .
+        run: cd custom_components/dashcam_sync && zip -r ../../dashcam_sync.zip .
       - uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true

@@ -27,8 +27,8 @@ async def test_malformed_push_messages_do_not_end_live_updates(
 ) -> None:
     for bad in (
         {"type": "camera"},
-        {"type": "camera", "camera": "polestar_2", "status": "not a dict"},
-        {"type": "clip", "camera": "polestar_2", "event_clip": True, "clip": None},
+        {"type": "camera", "camera": "family_car", "status": "not a dict"},
+        {"type": "clip", "camera": "family_car", "event_clip": True, "clip": None},
         {"type": "clip", "event_clip": True, "clip": {"id": 1}},
         {"type": "hub", "storage": 5, "issues": "x"},  # wrong shapes
         {"type": "snapshot", "cameras": None},
@@ -37,10 +37,10 @@ async def test_malformed_push_messages_do_not_end_live_updates(
     await hass.async_block_till_done()
     # The socket is still alive: a good message is applied afterwards.
     fake_api.push(
-        {"type": "camera", "camera": "polestar_2", "status": {**CAMERA, "sync_status": "listing"}}
+        {"type": "camera", "camera": "family_car", "status": {**CAMERA, "sync_status": "listing"}}
     )
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.polestar_2_sync_status").state == "listing"
+    assert hass.states.get("sensor.family_car_sync_status").state == "listing"
     assert hass.config_entries.async_get_entry(loaded.entry_id).state.value == "loaded"
 
 
@@ -48,11 +48,11 @@ async def test_pushed_events_cause_a_real_refresh_even_with_a_live_socket(
     hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
 ) -> None:
     before = len(fake_api.calls_named("status"))
-    fake_api.status["cameras"]["polestar_2"] = {**CAMERA, "sync_status": "downloading"}
+    fake_api.status["cameras"]["family_car"] = {**CAMERA, "sync_status": "downloading"}
     fake_api.push({"type": "safety", "route_unsafe": []})
     await hass.async_block_till_done()
     assert len(fake_api.calls_named("status")) > before  # used to be answered from the stale cache
-    assert hass.states.get("sensor.polestar_2_sync_status").state == "downloading"
+    assert hass.states.get("sensor.family_car_sync_status").state == "downloading"
 
 
 async def test_a_clip_message_without_a_clip_fires_no_event(
@@ -60,9 +60,9 @@ async def test_a_clip_message_without_a_clip_fires_no_event(
 ) -> None:
     from homeassistant.const import STATE_UNKNOWN
 
-    fake_api.push({"type": "clip", "camera": "polestar_2", "event_clip": True, "clip": None})
+    fake_api.push({"type": "clip", "camera": "family_car", "event_clip": True, "clip": None})
     await hass.async_block_till_done()
-    assert hass.states.get("event.polestar_2_clip").state == STATE_UNKNOWN  # nothing fired
+    assert hass.states.get("event.family_car_clip").state == STATE_UNKNOWN  # nothing fired
 
 
 async def test_rotating_the_token_does_not_change_the_identity(
@@ -145,7 +145,7 @@ async def test_unknown_overlap_results_get_a_translated_error(
         result["flow_id"], {"next_step_id": "wifi"}
     )
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"camera": "polestar_2"}
+        result["flow_id"], {"camera": "family_car"}
     )
     assert result["errors"] == {"base": "overlap_blocked"}
     fake_api.overlap = {"blocked": True}  # no result at all
@@ -154,7 +154,7 @@ async def test_unknown_overlap_results_get_a_translated_error(
         result["flow_id"], {"next_step_id": "wifi"}
     )
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {"camera": "polestar_2"}
+        result["flow_id"], {"camera": "family_car"}
     )
     assert result["errors"] == {"base": "overlap_blocked"}
 
@@ -185,7 +185,7 @@ async def test_the_image_path_check_runs_off_the_event_loop(
     hass: HomeAssistant, fake_api: FakeApi, entry: MockConfigEntry
 ) -> None:
     await setup_entry(hass, entry)
-    entity = hass.data["image"].get_entity("image.polestar_2_latest_event")
+    entity = hass.data["image"].get_entity("image.family_car_latest_event")
     with patch.object(hass, "async_add_executor_job", wraps=hass.async_add_executor_job) as job:
         await entity.async_image()
     assert any(
@@ -199,11 +199,11 @@ async def test_a_write_right_after_a_refresh_is_not_delayed_by_the_debounce_cool
     """A push that triggers a (debounced) refresh must not make our own write wait 10 s."""
     fake_api.push({"type": "options"})  # starts the coordinator's refresh cooldown
     await hass.async_block_till_done()
-    fake_api.status["cameras"]["polestar_2"] = {**CAMERA, "enabled": False}
+    fake_api.status["cameras"]["family_car"] = {**CAMERA, "enabled": False}
     await hass.services.async_call(
-        "switch", "turn_off", {"entity_id": "switch.polestar_2_auto_sync"}, blocking=True
+        "switch", "turn_off", {"entity_id": "switch.family_car_auto_sync"}, blocking=True
     )
-    assert hass.states.get("switch.polestar_2_auto_sync").state == "off"  # immediately, no sleeping
+    assert hass.states.get("switch.family_car_auto_sync").state == "off"  # immediately, no sleeping
 
 
 async def test_a_status_read_that_lands_after_a_push_does_not_undo_it(
@@ -221,18 +221,18 @@ async def test_a_status_read_that_lands_after_a_push_does_not_undo_it(
 
     async def answered_before_the_push() -> dict:
         await real()
-        fake_api.status["cameras"]["polestar_2"] = done
-        fake_api.push({"type": "camera", "camera": "polestar_2", "status": done})
+        fake_api.status["cameras"]["family_car"] = done
+        fake_api.push({"type": "camera", "camera": "family_car", "status": done})
         for _ in range(20):  # let the socket task deliver the push while this read is in flight
             await asyncio.sleep(0)
-        assert coordinator.data["cameras"]["polestar_2"]["last_sync"] == done["last_sync"]
+        assert coordinator.data["cameras"]["family_car"]["last_sync"] == done["last_sync"]
         return old
 
     with patch.object(fake_api, "async_status", answered_before_the_push):
         await coordinator.async_force_refresh()
     await hass.async_block_till_done()
-    assert coordinator.data["cameras"]["polestar_2"]["last_sync"] == done["last_sync"]
-    assert hass.states.get("sensor.polestar_2_last_sync").state != "unknown"
+    assert coordinator.data["cameras"]["family_car"]["last_sync"] == done["last_sync"]
+    assert hass.states.get("sensor.family_car_last_sync").state != "unknown"
 
 
 @pytest.mark.parametrize("kind", ["snapshot", "hub"])

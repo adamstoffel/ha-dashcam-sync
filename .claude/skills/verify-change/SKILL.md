@@ -19,7 +19,7 @@ Two virtualenvs at the repo root (create with `scripts/dev.py` docs in CONTRIBUT
 | Area touched | Command (from the repo root unless noted) |
 | --- | --- |
 | App code | `cd app && ../.venv-app/bin/ruff check . && ../.venv-app/bin/ruff format --check . && ../.venv-app/bin/mypy && ../.venv-app/bin/python -m pytest -q --cov --cov-fail-under=90` |
-| Integration | `cd integration && ../.venv-ha/bin/ruff check . && ../.venv-ha/bin/ruff format --check . && ../.venv-ha/bin/python -m mypy && ../.venv-ha/bin/python -m pytest -q --cov=custom_components.dashcam_sync --cov-fail-under=95` |
+| Integration | `cd integration && ../.venv-ha/bin/ruff check --config pyproject.toml . ../custom_components && ../.venv-ha/bin/ruff format --check --config pyproject.toml . ../custom_components && ../.venv-ha/bin/python -m mypy && ../.venv-ha/bin/python -m pytest -q --cov=custom_components.dashcam_sync --cov-fail-under=95` |
 | App ↔ integration behaviour | `cd e2e && ../.venv-ha/bin/python -m pytest -q --timeout=60` (run it 3 times: it catches races) |
 | Panel (`app/.../ui_static`) | `node --check app/dashcam_sync/src/dashcam_sync/ui_static/app.js && node e2e/ui/panel.cjs` (add `--screens <dir>` for screenshots) |
 | Scripts, docs, repo metadata | `.venv-ha/bin/python -m pytest -q scripts` and `python3 scripts/check_versions.py` |

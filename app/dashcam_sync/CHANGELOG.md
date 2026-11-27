@@ -1,8 +1,16 @@
 # Changelog
 
-## 2026.11.0
+## 2026.11.0b1
 
-First public version.
+First public beta.
+
+- Tested on a real camera: SGK GK720X (Viidure `/app` API) on Home Assistant OS, including the Wi-Fi join, downloads, remux and playback.
+- Point-to-point addressing when the camera's range sits inside your home network and an address next to it is taken.
+- The Wi-Fi join works with password-protected hotspots (the Supervisor's `auth` key).
+- Downloads are verified against the camera's own headers when its file list gives no reliable sizes; crash recovery covers every step.
+- A step-by-step camera wizard with Wi-Fi scan, a Settings page, and a panel that follows Home Assistant's look.
+
+Initial build:
 
 - Drivers for Novatek, Viidure `/app` and generic HTTP index cameras.
 - Resumable, verified downloads; the camera is always put back into recording.

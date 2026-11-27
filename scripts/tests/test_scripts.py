@@ -207,7 +207,7 @@ def test_install_on_ha_copies_both_parts_and_bumps_the_version(tmp_path: Path) -
     root = SCRIPTS.parent
     tarball = tmp_path / "src.tar.gz"
     with tarfile.open(tarball, "w:gz") as tar:
-        for part in ("app/dashcam_sync", "integration/custom_components/dashcam_sync"):
+        for part in ("app/dashcam_sync", "custom_components/dashcam_sync"):
             tar.add(root / part, arcname=f"ha-dashcam-sync-x/{part}")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()

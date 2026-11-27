@@ -66,7 +66,7 @@ async def daemon(tmp_path: Path, camera: FakeCamera) -> AsyncIterator[Daemon]:
     (data / "options.json").write_text(
         json.dumps(
             {
-                "cameras": [{"id": "polestar_2", "name": "Polestar 2", "connection": "lan",
+                "cameras": [{"id": "family_car", "name": "Family car", "connection": "lan",
                              "host": camera.host, "driver": "auto", "enabled": True}],
                 "sync": {"mode": "everything", "remux_to_mp4": False, "thumbnails": False},
                 "retention": {"min_free_percent": 0, "max_total_gb": 0},

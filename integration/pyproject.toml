@@ -1,11 +1,13 @@
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# The integration lives at the repository root (where HACS installs it from).
+pythonpath = [".."]
 addopts = "-q -p no:cacheprovider"
 filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.coverage.run]
-source = ["custom_components/dashcam_sync"]
+source = ["../custom_components/dashcam_sync"]
 branch = true
 
 [tool.coverage.report]
@@ -21,7 +23,11 @@ target-version = "py313"
 select = ["E", "F", "W", "I", "UP", "B", "ASYNC", "RUF", "C4", "PT"]
 ignore = ["E501", "B904", "RUF012", "PT018", "PT011", "RUF029"]
 
+[tool.ruff.lint.isort]
+# The integration lives at the repository root, outside this folder.
+known-first-party = ["custom_components"]
+
 [tool.mypy]
 python_version = "3.14"
 strict = true
-files = ["custom_components/dashcam_sync"]
+files = ["../custom_components/dashcam_sync"]

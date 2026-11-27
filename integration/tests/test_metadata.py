@@ -12,7 +12,7 @@ import yaml
 from custom_components.dashcam_sync import const
 
 ROOT = Path(__file__).resolve().parent.parent
-INTEGRATION = ROOT / "custom_components" / "dashcam_sync"
+INTEGRATION = ROOT.parent / "custom_components" / "dashcam_sync"
 MANIFEST = json.loads((INTEGRATION / "manifest.json").read_text())
 STRINGS = json.loads((INTEGRATION / "strings.json").read_text())
 
@@ -22,7 +22,7 @@ def test_manifest_has_what_the_catalog_requires() -> None:
         assert MANIFEST[key], key
     assert MANIFEST["domain"] == "dashcam_sync" == const.DOMAIN
     assert MANIFEST["iot_class"] == "local_push" and MANIFEST["config_flow"] is True
-    assert re.match(r"^\d{4}\.\d{1,2}\.\d+$", MANIFEST["version"])
+    assert re.match(r"^\d{4}\.\d{1,2}\.\d+(b\d+)?$", MANIFEST["version"])
     assert MANIFEST["codeowners"][0].startswith("@")
     assert list(MANIFEST) == sorted(
         MANIFEST, key=lambda k: (k not in ("domain", "name"), k)
@@ -35,7 +35,7 @@ def test_version_matches_the_app() -> None:
 
 
 def test_hacs_json() -> None:
-    hacs = json.loads((ROOT / "hacs.json").read_text())
+    hacs = json.loads((ROOT.parent / "hacs.json").read_text())
     assert hacs["name"] and hacs["homeassistant"] == "2026.11.0"
 
 
@@ -106,7 +106,8 @@ def test_blueprint_is_importable() -> None:
 
     Loader.add_constructor("!input", lambda loader, node: f"INPUT:{loader.construct_scalar(node)}")
     blueprint = yaml.load(
-        (ROOT / "blueprints/automation/dashcam_sync/notify_event_clip.yaml").read_text(), Loader
+        (ROOT.parent / "blueprints/automation/dashcam_sync/notify_event_clip.yaml").read_text(),
+        Loader,
     )
     meta = blueprint["blueprint"]
     assert meta["domain"] == "automation" and meta["source_url"].startswith("https://")

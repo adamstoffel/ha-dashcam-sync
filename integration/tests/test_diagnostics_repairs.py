@@ -23,12 +23,12 @@ from custom_components.dashcam_sync.wifi import WifiUnavailable
 from .conftest import FakeApi, setup_entry
 
 ISSUES = [
-    {"key": "camera_playback_mode", "camera": "polestar_2", "placeholders": {}},
-    {"key": "subnet_overlap", "camera": "polestar_2",
+    {"key": "camera_playback_mode", "camera": "family_car", "placeholders": {}},
+    {"key": "subnet_overlap", "camera": "family_car",
      "placeholders": {"result": "device_in_block", "conflicts": ["192.168.1.255"], "block": "192.168.1.252 to 192.168.1.255"}},
-    {"key": "default_route_changed", "camera": "polestar_2", "placeholders": {"reason": "default_route_moved"}},
+    {"key": "default_route_changed", "camera": "family_car", "placeholders": {"reason": "default_route_moved"}},
     {"key": "storage_low", "camera": None, "placeholders": {"target": "local", "free_percent": 4.5}},
-    {"key": "unsupported_camera", "camera": "polestar_2", "placeholders": {}},
+    {"key": "unsupported_camera", "camera": "family_car", "placeholders": {}},
     {"key": "no_wifi_adapter", "camera": None, "placeholders": {}},
 ]  # fmt: skip
 
@@ -55,7 +55,7 @@ async def test_diagnostics_are_redacted(
     ):
         assert secret not in text, secret
     assert diag["app_version"] == "2026.11.0" and diag["websocket_connected"] in (True, False)
-    cam = diag["cameras"]["polestar_2"]
+    cam = diag["cameras"]["family_car"]
     assert cam["driver"] == "novatek" and cam["capabilities"]["delete"] is True
     assert diag["sessions"][0]["clips"] == 2 and "x.x.x.x" not in diag["sessions"][0].get(
         "error", ""
@@ -82,10 +82,10 @@ async def test_app_issues_become_repair_issues_and_clear(
     await hass.async_block_till_done()
     expected = {issue_id(i["key"], i["camera"]) for i in ISSUES}
     assert expected <= {i.issue_id for i in registry.issues.values() if i.domain == DOMAIN}
-    overlap = registry.async_get_issue(DOMAIN, "subnet_overlap_polestar_2")
+    overlap = registry.async_get_issue(DOMAIN, "subnet_overlap_family_car")
     assert overlap.is_fixable and overlap.severity == ir.IssueSeverity.ERROR
     assert overlap.translation_placeholders["conflicts"] == "192.168.1.255"
-    assert registry.async_get_issue(DOMAIN, "unsupported_camera_polestar_2").is_fixable is False
+    assert registry.async_get_issue(DOMAIN, "unsupported_camera_family_car").is_fixable is False
     assert (
         registry.async_get_issue(DOMAIN, "storage_low_hub").translation_placeholders["free_percent"]
         == "4.5"
@@ -95,8 +95,8 @@ async def test_app_issues_become_repair_issues_and_clear(
     await hass.async_block_till_done()
     remaining = {i.issue_id for i in registry.issues.values() if i.domain == DOMAIN}
     assert (
-        "camera_playback_mode_polestar_2" in remaining
-        and "subnet_overlap_polestar_2" not in remaining
+        "camera_playback_mode_family_car" in remaining
+        and "subnet_overlap_family_car" not in remaining
     )
 
     fake_api.push({"type": "snapshot", **{**fake_api.status, "issues": []}})
@@ -156,19 +156,19 @@ async def run_flow(
 
 
 async def test_fix_restore(hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi) -> None:
-    result = await run_flow(hass, loaded, "camera_playback_mode", "polestar_2")
+    result = await run_flow(hass, loaded, "camera_playback_mode", "family_car")
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert fake_api.calls_named("restore") == [("polestar_2",)]
+    assert fake_api.calls_named("restore") == [("family_car",)]
 
 
 async def test_fix_overlap_recheck(
     hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
 ) -> None:
     fake_api.overlap = {"result": "device_in_block", "blocked": True, "conflicts": []}
-    result = await run_flow(hass, loaded, "subnet_overlap", "polestar_2")
+    result = await run_flow(hass, loaded, "subnet_overlap", "family_car")
     assert result["type"] is FlowResultType.FORM and result["errors"] == {"base": "still_blocked"}
     fake_api.overlap = {"result": "overlap_block_free", "blocked": False, "conflicts": []}
-    result = await run_flow(hass, loaded, "subnet_overlap", "polestar_2")
+    result = await run_flow(hass, loaded, "subnet_overlap", "family_car")
     assert result["type"] is FlowResultType.CREATE_ENTRY
 
 
@@ -178,13 +178,13 @@ async def test_fix_default_route_disconnects_the_wifi(
     with patch(
         "custom_components.dashcam_sync.repairs.async_disconnect", new=AsyncMock()
     ) as disconnect:
-        result = await run_flow(hass, loaded, "default_route_changed", "polestar_2")
+        result = await run_flow(hass, loaded, "default_route_changed", "family_car")
     assert result["type"] is FlowResultType.CREATE_ENTRY
     disconnect.assert_awaited_once_with(hass, "wlan0")
     with patch(
         "custom_components.dashcam_sync.repairs.async_disconnect", side_effect=WifiUnavailable("x")
     ):
-        result = await run_flow(hass, loaded, "default_route_changed", "polestar_2")
+        result = await run_flow(hass, loaded, "default_route_changed", "family_car")
     assert result["errors"] == {"base": "wifi_unavailable"}
 
 
@@ -201,10 +201,10 @@ async def test_fix_failures(
     hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
 ) -> None:
     fake_api.error = DashcamSyncConnectionError("down")
-    result = await run_flow(hass, loaded, "camera_playback_mode", "polestar_2")
+    result = await run_flow(hass, loaded, "camera_playback_mode", "family_car")
     assert result["errors"] == {"base": "app_unavailable"}
     fake_api.error = None
-    result = await run_flow(hass, loaded, "unsupported_camera", "polestar_2")
+    result = await run_flow(hass, loaded, "unsupported_camera", "family_car")
     assert result["errors"] == {"base": "not_fixable"}
     flow = DashcamSyncFixFlow({"entry_id": "missing", "key": "storage_low"})
     flow.hass = hass
@@ -227,7 +227,7 @@ async def test_fix_flow_through_the_repairs_api(
     client = await hass_client()
     resp = await client.post(
         "/api/repairs/issues/fix",
-        json={"handler": DOMAIN, "issue_id": "camera_playback_mode_polestar_2"},
+        json={"handler": DOMAIN, "issue_id": "camera_playback_mode_family_car"},
     )
     assert resp.status == 200
     flow = await resp.json()

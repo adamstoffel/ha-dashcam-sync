@@ -28,7 +28,7 @@ async def settle(hass: HomeAssistant, rounds: int = 50) -> None:
 
 
 async def join(hass: HomeAssistant, fake_api: FakeApi) -> tuple:
-    fake_api.push({"type": "join_wifi", "camera": "polestar_2"})
+    fake_api.push({"type": "join_wifi", "camera": "family_car"})
     await settle(hass)
     results = fake_api.calls_named("join_result")
     assert len(results) == 1
@@ -43,7 +43,7 @@ async def test_a_join_request_joins_and_reports_back(
         patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
         patch(f"{W}.async_apply_profile", apply),
     ):
-        assert await join(hass, fake_api) == ("polestar_2", "joined", None)
+        assert await join(hass, fake_api) == ("family_car", "joined", None)
     profile = apply.await_args.args[1]
     assert profile.ssid == "CAMWIFI" and profile.address == "192.168.1.253" and profile.prefix == 30
 
@@ -88,7 +88,7 @@ async def test_every_join_outcome_is_reported(
     ):
         camera, got_state, reason = await join(hass, fake_api)
     fake_api.async_wifi = real_wifi  # type: ignore[method-assign]
-    assert camera == "polestar_2" and got_state == state
+    assert camera == "family_car" and got_state == state
     assert reason_part in (reason or "")
     if state == "failed":
         apply_mock.assert_not_awaited()  # never connect and hope
@@ -157,7 +157,7 @@ async def test_the_join_applies_the_address_the_check_just_picked(
         patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
         patch(f"{W}.async_apply_profile", apply),
     ):
-        assert await join(hass, fake_api) == ("polestar_2", "joined", None)
+        assert await join(hass, fake_api) == ("family_car", "joined", None)
     profile = apply.await_args.args[1]
     assert profile.address == "192.168.1.200" and profile.prefix == 32
     assert profile.gateway == "192.168.1.254"
@@ -182,8 +182,8 @@ async def test_joins_for_one_camera_never_overlap(
         patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
         patch(f"{W}.async_apply_profile", side_effect=slow_apply),
     ):
-        fake_api.push({"type": "join_wifi", "camera": "polestar_2"})
-        fake_api.push({"type": "join_wifi", "camera": "polestar_2"})
+        fake_api.push({"type": "join_wifi", "camera": "family_car"})
+        fake_api.push({"type": "join_wifi", "camera": "family_car"})
         await settle(hass)
     assert peak == 1
     assert len(fake_api.calls_named("join_result")) == 2
@@ -204,7 +204,7 @@ async def test_unloading_cancels_a_running_join(
         patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
         patch(f"{W}.async_apply_profile", side_effect=hang),
     ):
-        fake_api.push({"type": "join_wifi", "camera": "polestar_2"})
+        fake_api.push({"type": "join_wifi", "camera": "family_car"})
         await asyncio.wait_for(started.wait(), 5)
         assert await hass.config_entries.async_unload(loaded.entry_id)
         await settle(hass)

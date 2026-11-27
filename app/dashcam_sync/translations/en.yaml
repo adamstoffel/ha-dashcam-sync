@@ -19,13 +19,13 @@ configuration:
         description: Stable key for folders, devices and entity IDs (lower-case letters, digits, underscore).
       name:
         name: Name
-        description: Display name, for example Polestar 2.
+        description: Display name, for example Family car.
       connection:
         name: Connection
         description: hotspot = Camera hotspot (the camera runs its own Wi-Fi), lan = Local network (the camera is a client on your LAN).
       interface:
         name: Wi-Fi interface
-        description: The Home Assistant Wi-Fi interface that joins the camera hotspot, as shown under Settings › System › Network (for example wlp4s0).
+        description: The Home Assistant Wi-Fi interface that joins the camera hotspot, as shown under Settings › System › Network (for example wlan0).
       ssid:
         name: Camera SSID
         description: The name of the camera's hotspot.

@@ -56,8 +56,8 @@ def test_local_disks_added_in_home_assistant_count_as_storage() -> None:
 
 def test_clip_relative_path_never_uses_camera_names() -> None:
     rec = Recording("A:\\CARDV\\..\\evil\\x.mp4", 1, at(10, 16), Kind.EVENT, Channel.REAR)
-    rel = clip_relative_path("polestar_2", rec)
-    assert str(rel) == "polestar_2/2026/11/22/event/20261122_101600_rear.mp4"
+    rel = clip_relative_path("family_car", rec)
+    assert str(rel) == "family_car/2026/11/22/event/20261122_101600_rear.mp4"
     weird = Recording("/x/y.exe", 1, at(1), Kind.NORMAL)
     assert clip_relative_path("c", weird).suffix == ".mp4"
 

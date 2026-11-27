@@ -51,7 +51,7 @@ def test_manifest_basics() -> None:
     assert CONFIG["ports"] == {"8100/tcp": None} and CONFIG["ingress_port"] == 8099
     assert {m["type"] for m in CONFIG["map"]} == {"media", "share"}
     assert CONFIG["timeout"] == 60 and CONFIG["stage"] == "experimental"
-    assert re.match(r"^\d{4}\.\d{1,2}\.\d+$", CONFIG["version"])  # CalVer
+    assert re.match(r"^\d{4}\.\d{1,2}\.\d+(b\d+)?$", CONFIG["version"])  # CalVer
 
 
 def test_defaults_in_config_match_the_code() -> None:
@@ -149,7 +149,8 @@ def test_docs_carry_the_overlap_guide() -> None:
 
 @pytest.mark.parametrize("name", ["repository.yaml"])
 def test_repository_yaml(name: str) -> None:
-    data = yaml.safe_load((APP.parent / name).read_text())
+    # At the repository root: the Supervisor only reads it there (and finds the app below).
+    data = yaml.safe_load((APP.parent.parent / name).read_text())
     assert data["name"] and data["url"].startswith("https://") and data["maintainer"]
 
 

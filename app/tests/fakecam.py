@@ -325,7 +325,10 @@ class FakeCamera:
             )
         if path == "/app/getdeviceattr":
             return web.json_response(
-                {"result": 0, "info": {"softver": "V7_X83_260126", "ssid": "P2DC", "camnum": 1}}
+                {
+                    "result": 0,
+                    "info": {"softver": "V7_X83_260126", "ssid": "CARDV-5A3F", "camnum": 1},
+                }
             )
         if path == "/app/getmediainfo":
             return web.json_response(

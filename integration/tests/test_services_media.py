@@ -84,14 +84,14 @@ async def test_sync_action_targets_devices_and_entities(
     hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
 ) -> None:
     device = dr.async_get(hass).async_get_device_by_identifier(
-        (DOMAIN, "polestar_2"), loaded.entry_id
+        (DOMAIN, "family_car"), loaded.entry_id
     )
     assert device is not None
     await hass.services.async_call(DOMAIN, "sync", {"device_id": device.id}, blocking=True)
     await hass.services.async_call(
-        DOMAIN, "sync", {"entity_id": "sensor.polestar_2_sync_status"}, blocking=True
+        DOMAIN, "sync", {"entity_id": "sensor.family_car_sync_status"}, blocking=True
     )
-    assert fake_api.calls_named("sync") == [("polestar_2",), ("polestar_2",)]
+    assert fake_api.calls_named("sync") == [("family_car",), ("family_car",)]
     hub = dr.async_get(hass).async_get_device_by_identifier(
         (DOMAIN, loaded.entry_id), loaded.entry_id
     )
@@ -117,16 +117,16 @@ async def test_browse_cameras_days_filters_and_clips(
 ) -> None:
     assert await async_setup_component(hass, "media_source", {})
     root = await async_browse_media(hass, "media-source://dashcam_sync")
-    assert [c.title for c in root.children] == ["Polestar 2"]
+    assert [c.title for c in root.children] == ["Family car"]
 
-    cam = await async_browse_media(hass, "media-source://dashcam_sync/polestar_2")
+    cam = await async_browse_media(hass, "media-source://dashcam_sync/family_car")
     assert [c.title for c in cam.children] == ["2026-11-22", "2026-11-21"]  # newest first
 
-    day = await async_browse_media(hass, "media-source://dashcam_sync/polestar_2/2026-11-22")
+    day = await async_browse_media(hass, "media-source://dashcam_sync/family_car/2026-11-22")
     assert [c.title for c in day.children] == ["Event", "All"]
 
     clips = await async_browse_media(
-        hass, "media-source://dashcam_sync/polestar_2/2026-11-22/event"
+        hass, "media-source://dashcam_sync/family_car/2026-11-22/event"
     )
     assert len(clips.children) == 1
     item = clips.children[0]
@@ -139,7 +139,7 @@ async def test_browse_cameras_days_filters_and_clips(
     )
     assert fake_api.calls_named("clips")  # day and kind filters reach the app
     all_clips = await async_browse_media(
-        hass, "media-source://dashcam_sync/polestar_2/2026-11-22/all"
+        hass, "media-source://dashcam_sync/family_car/2026-11-22/all"
     )
     assert len(all_clips.children) == 1
 
@@ -149,7 +149,7 @@ async def test_browse_photo_and_clip_without_thumbnail(
 ) -> None:
     assert await async_setup_component(hass, "media_source", {})
     fake_api.clips.append({**fake_api.clips[0], "id": 8, "kind": "photo", "thumbnail": None})
-    clips = await async_browse_media(hass, "media-source://dashcam_sync/polestar_2/2026-11-22/all")
+    clips = await async_browse_media(hass, "media-source://dashcam_sync/family_car/2026-11-22/all")
     photo = next(c for c in clips.children if c.media_content_id.endswith("/8"))
     assert photo.media_class == "image" and photo.thumbnail is None
 
@@ -164,7 +164,7 @@ async def test_browse_errors(
         await async_browse_media(hass, "media-source://dashcam_sync/a/b/bogus")
     fake_api.error = DashcamSyncRequestError(500, "boom")
     with pytest.raises(BrowseError):
-        await async_browse_media(hass, "media-source://dashcam_sync/polestar_2")
+        await async_browse_media(hass, "media-source://dashcam_sync/family_car")
 
 
 async def test_browse_when_the_integration_is_not_loaded(hass: HomeAssistant) -> None:

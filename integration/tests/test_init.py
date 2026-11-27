@@ -39,7 +39,7 @@ async def test_setup_creates_devices_and_entities(
     assert loaded.state is ConfigEntryState.LOADED
     dev_reg = dr.async_get(hass)
     hub = dev_reg.async_get_device_by_identifier((DOMAIN, loaded.entry_id), loaded.entry_id)
-    camera = dev_reg.async_get_device_by_identifier((DOMAIN, "polestar_2"), loaded.entry_id)
+    camera = dev_reg.async_get_device_by_identifier((DOMAIN, "family_car"), loaded.entry_id)
     assert hub is not None and camera is not None
     assert (
         camera.via_device_id == hub.id and camera.model == "NT96" and camera.sw_version == "FW-1.2"
@@ -49,21 +49,21 @@ async def test_setup_creates_devices_and_entities(
     ent_reg = er.async_get(hass)
     unique_ids = {e.unique_id for e in er.async_entries_for_config_entry(ent_reg, loaded.entry_id)}
     assert {
-        "polestar_2_connected",
-        "polestar_2_sync_status",
-        "polestar_2_clips_remaining",
-        "polestar_2_data_remaining",
-        "polestar_2_download_speed",
-        "polestar_2_last_sync",
-        "polestar_2_last_event_clip",
-        "polestar_2_sd_card_free",
-        "polestar_2_clip",
-        "polestar_2_latest_event",
-        "polestar_2_live",
-        "polestar_2_sync_now",
-        "polestar_2_restore_recording",
-        "polestar_2_auto_sync",
-        "polestar_2_sync_mode",
+        "family_car_connected",
+        "family_car_sync_status",
+        "family_car_clips_remaining",
+        "family_car_data_remaining",
+        "family_car_download_speed",
+        "family_car_last_sync",
+        "family_car_last_event_clip",
+        "family_car_sd_card_free",
+        "family_car_clip",
+        "family_car_latest_event",
+        "family_car_live",
+        "family_car_sync_now",
+        "family_car_restore_recording",
+        "family_car_auto_sync",
+        "family_car_sync_mode",
         "hub_local_storage_used",
         "hub_local_storage_free",
         "hub_purge_now",
@@ -73,27 +73,27 @@ async def test_setup_creates_devices_and_entities(
 
 
 async def test_entity_states(hass: HomeAssistant, loaded: MockConfigEntry) -> None:
-    assert hass.states.get("binary_sensor.polestar_2_connected").state == STATE_ON
-    assert hass.states.get("sensor.polestar_2_sync_status").state == "idle"
-    assert hass.states.get("sensor.polestar_2_clips_remaining").state == "3"
-    assert float(hass.states.get("sensor.polestar_2_data_remaining").state) == pytest.approx(
+    assert hass.states.get("binary_sensor.family_car_connected").state == STATE_ON
+    assert hass.states.get("sensor.family_car_sync_status").state == "idle"
+    assert hass.states.get("sensor.family_car_clips_remaining").state == "3"
+    assert float(hass.states.get("sensor.family_car_data_remaining").state) == pytest.approx(
         0.1, abs=0.1
     )
-    assert hass.states.get("sensor.polestar_2_last_sync").state == "2026-11-22T10:20:00+00:00"
-    assert hass.states.get("sensor.polestar_2_last_event_clip").state == "2026-11-22T10:16:00+00:00"
+    assert hass.states.get("sensor.family_car_last_sync").state == "2026-11-22T10:20:00+00:00"
+    assert hass.states.get("sensor.family_car_last_event_clip").state == "2026-11-22T10:16:00+00:00"
     # Diagnostics that are rarely useful are disabled by default.
     registry = er.async_get(hass)
     for key in ("download_speed", "sd_card_free"):
-        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"polestar_2_{key}")
+        entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"family_car_{key}")
         assert registry.async_get(entity_id).disabled_by is er.RegistryEntryDisabler.INTEGRATION
         assert hass.states.get(entity_id) is None
-    assert hass.states.get("switch.polestar_2_auto_sync").state == STATE_ON
-    assert hass.states.get("select.polestar_2_sync_mode").state == "events_first"
+    assert hass.states.get("switch.family_car_auto_sync").state == STATE_ON
+    assert hass.states.get("select.family_car_sync_mode").state == "events_first"
     assert float(hass.states.get("sensor.dashcam_sync_local_storage_used").state) == pytest.approx(
         5.0
     )
-    assert hass.states.get("camera.polestar_2_live").state != STATE_UNAVAILABLE
-    assert hass.states.get("image.polestar_2_latest_event") is not None
+    assert hass.states.get("camera.family_car_live").state != STATE_UNAVAILABLE
+    assert hass.states.get("image.family_car_latest_event") is not None
     # No network target configured: the problem sensor is unavailable rather than lying.
     assert hass.states.get("binary_sensor.dashcam_sync_network_storage").state == STATE_UNAVAILABLE
 
@@ -119,10 +119,10 @@ async def test_unload_and_reload(hass: HomeAssistant, loaded: MockConfigEntry) -
     assert await hass.config_entries.async_unload(loaded.entry_id)
     await hass.async_block_till_done()
     assert loaded.state is ConfigEntryState.NOT_LOADED
-    assert hass.states.get("sensor.polestar_2_sync_status").state == STATE_UNAVAILABLE
+    assert hass.states.get("sensor.family_car_sync_status").state == STATE_UNAVAILABLE
     assert await hass.config_entries.async_setup(loaded.entry_id)
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.polestar_2_sync_status").state == "idle"
+    assert hass.states.get("sensor.family_car_sync_status").state == "idle"
 
 
 @pytest.mark.parametrize(
@@ -166,11 +166,11 @@ async def test_poll_fallback_goes_unavailable_and_recovers(
     fake_api.status_error = DashcamSyncConnectionError("down")
     async_fire_time_changed(hass, dt_util.utcnow() + POLL_INTERVAL * 2)
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.polestar_2_sync_status").state == STATE_UNAVAILABLE
+    assert hass.states.get("sensor.family_car_sync_status").state == STATE_UNAVAILABLE
     fake_api.status_error = None
     async_fire_time_changed(hass, dt_util.utcnow() + POLL_INTERVAL * 4)
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.polestar_2_sync_status").state == "idle"
+    assert hass.states.get("sensor.family_car_sync_status").state == "idle"
 
 
 async def test_poll_auth_error_starts_reauth(
@@ -205,11 +205,11 @@ async def test_a_camera_that_vanishes_is_unavailable_and_its_device_removable(
     status["cameras"] = {}
     fake_api.push({"type": "snapshot", **status})
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.polestar_2_sync_status").state == STATE_UNAVAILABLE
+    assert hass.states.get("sensor.family_car_sync_status").state == STATE_UNAVAILABLE
     from custom_components.dashcam_sync import async_remove_config_entry_device
 
     dev_reg = dr.async_get(hass)
-    device = dev_reg.async_get_device_by_identifier((DOMAIN, "polestar_2"), loaded.entry_id)
+    device = dev_reg.async_get_device_by_identifier((DOMAIN, "family_car"), loaded.entry_id)
     assert device is not None
     assert await async_remove_config_entry_device(hass, loaded, device)
     hub = dev_reg.async_get_device_by_identifier((DOMAIN, loaded.entry_id), loaded.entry_id)
@@ -222,11 +222,11 @@ async def test_push_updates_state_without_polling(
     hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
 ) -> None:
     updated = {**CAMERA, "sync_status": "downloading", "connected": False, "clips_remaining": 1}
-    fake_api.push({"type": "camera", "camera": "polestar_2", "status": updated})
+    fake_api.push({"type": "camera", "camera": "family_car", "status": updated})
     await hass.async_block_till_done()
-    assert hass.states.get("sensor.polestar_2_sync_status").state == "downloading"
-    assert hass.states.get("binary_sensor.polestar_2_connected").state == STATE_OFF
-    assert hass.states.get("camera.polestar_2_live").state == STATE_UNAVAILABLE  # out of range
+    assert hass.states.get("sensor.family_car_sync_status").state == "downloading"
+    assert hass.states.get("binary_sensor.family_car_connected").state == STATE_OFF
+    assert hass.states.get("camera.family_car_live").state == STATE_UNAVAILABLE  # out of range
 
 
 async def test_socket_reconnects_after_an_error(

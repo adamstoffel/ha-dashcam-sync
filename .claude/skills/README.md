@@ -17,7 +17,7 @@ They are written for Home Assistant Core. Map their paths and tools like this:
 
 | In the skill | In this repository |
 | --- | --- |
-| `homeassistant/components/<domain>/` | `integration/custom_components/dashcam_sync/` |
+| `homeassistant/components/<domain>/` | `custom_components/dashcam_sync/` (tests in `integration/tests/`) |
 | `tests/components/<domain>/` | `integration/tests/` |
 | `python -m script.hassfest ...` | the `hassfest` CI job (`home-assistant/actions/hassfest`) |
 | base branch `dev` | `main` |

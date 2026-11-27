@@ -11,11 +11,9 @@ ROOT = Path(__file__).resolve().parents[2]
 DOCS = [
     *ROOT.glob("*.md"),
     *(ROOT / "docs").rglob("*.md"),
-    ROOT / "app" / "README.md",
     ROOT / "app" / "dashcam_sync" / "README.md",
     ROOT / "app" / "dashcam_sync" / "DOCS.md",
     ROOT / "app" / "dashcam_sync" / "CHANGELOG.md",
-    ROOT / "integration" / "README.md",
 ]
 LINK = re.compile(
     r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)|!\[[^\]]*\]\(([^)\s]+)\)|<img[^>]+src=\"([^\"]+)\""
@@ -53,7 +51,7 @@ def test_links_resolve(doc: Path) -> None:
 
 
 def test_screenshots_exist_and_are_real_pngs() -> None:
-    for name in ("overview", "cameras", "clips", "storage", "logs"):
+    for name in ("overview", "cameras", "cameras-wizard", "clips", "storage", "settings", "logs"):
         data = (ROOT / "docs" / "images" / f"{name}.png").read_bytes()
         assert data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) > 10_000, name
 

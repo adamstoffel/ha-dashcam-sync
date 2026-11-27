@@ -37,9 +37,9 @@ async def wait_for(hass: HomeAssistant, predicate, timeout: float = 15.0, descri
 def stack_state(hass: HomeAssistant, stack: Stack) -> str:
     """Everything needed to see where an update got stuck between the app and Home Assistant."""
     coordinator = stack.entry.runtime_data.coordinator
-    worker = stack.daemon.workers["polestar_2"].status
-    cam = (coordinator.data or {}).get("cameras", {}).get("polestar_2", {})
-    state = hass.states.get("sensor.polestar_2_last_sync")
+    worker = stack.daemon.workers["family_car"].status
+    cam = (coordinator.data or {}).get("cameras", {}).get("family_car", {})
+    state = hass.states.get("sensor.family_car_last_sync")
     return (
         f"app last_sync={worker.last_sync} sync_status={worker.sync_status}; "
         f"ws_connected={coordinator.ws_connected} bus_subscribers={stack.daemon.bus.subscribers} "
@@ -52,14 +52,14 @@ def stack_state(hass: HomeAssistant, stack: Stack) -> str:
 async def synced(hass: HomeAssistant, stack: Stack) -> None:
     await wait_for(
         hass,
-        lambda: stack.daemon.workers["polestar_2"].status.last_sync is not None,
+        lambda: stack.daemon.workers["family_car"].status.last_sync is not None,
         describe=lambda: stack_state(hass, stack),
     )
     await stack.daemon.post.drain()  # type: ignore[union-attr]
     await wait_for(
         hass,
         lambda: (
-            (s := hass.states.get("sensor.polestar_2_last_sync")) is not None
+            (s := hass.states.get("sensor.family_car_last_sync")) is not None
             and s.state not in ("unknown", "unavailable")
         ),
         describe=lambda: stack_state(hass, stack),
@@ -71,14 +71,14 @@ async def test_camera_to_entities(hass: HomeAssistant, stack: Stack) -> None:
     assert (
         stack.camera.recording and stack.camera.mode == "movie"
     )  # restored after the session
-    assert hass.states.get("binary_sensor.polestar_2_connected").state == STATE_ON
-    assert hass.states.get("sensor.polestar_2_sync_status").state == "idle"
-    assert hass.states.get("sensor.polestar_2_clips_remaining").state == "0"
-    assert hass.states.get("select.polestar_2_sync_mode").state == "everything"
-    assert hass.states.get("switch.polestar_2_auto_sync").state == STATE_ON
+    assert hass.states.get("binary_sensor.family_car_connected").state == STATE_ON
+    assert hass.states.get("sensor.family_car_sync_status").state == "idle"
+    assert hass.states.get("sensor.family_car_clips_remaining").state == "0"
+    assert hass.states.get("select.family_car_sync_mode").state == "everything"
+    assert hass.states.get("switch.family_car_auto_sync").state == STATE_ON
     assert float(hass.states.get("sensor.dashcam_sync_local_storage_used").state) >= 0
-    assert hass.states.get("camera.polestar_2_live") is not None
-    event = hass.states.get("sensor.polestar_2_last_event_clip")
+    assert hass.states.get("camera.family_car_live") is not None
+    event = hass.states.get("sensor.family_car_last_event_clip")
     assert event.state.startswith("2026-11-22T")  # the RO/ clip is an event
 
 
@@ -88,22 +88,22 @@ async def test_media_browser_resolves_real_clips(
     await synced(hass, stack)
     assert await async_setup_component(hass, "media_source", {})
     root = await async_browse_media(hass, "media-source://dashcam_sync")
-    assert [c.title for c in root.children] == ["Polestar 2"]
-    days = await async_browse_media(hass, "media-source://dashcam_sync/polestar_2")
+    assert [c.title for c in root.children] == ["Family car"]
+    days = await async_browse_media(hass, "media-source://dashcam_sync/family_car")
     assert [c.title for c in days.children] == ["2026-11-22"]
     clips = await async_browse_media(
-        hass, "media-source://dashcam_sync/polestar_2/2026-11-22/event"
+        hass, "media-source://dashcam_sync/family_car/2026-11-22/event"
     )
     assert len(clips.children) == 1 and "event" in clips.children[0].title
     everything = await async_browse_media(
-        hass, "media-source://dashcam_sync/polestar_2/2026-11-22/all"
+        hass, "media-source://dashcam_sync/family_car/2026-11-22/all"
     )
     assert len(everything.children) == 2
     media = await async_resolve_media(hass, clips.children[0].media_content_id, None)
     assert media.mime_type == "video/mp4"
     with pytest.raises(BrowseError):
         await async_browse_media(
-            hass, "media-source://dashcam_sync/polestar_2/2026-11-22/bogus"
+            hass, "media-source://dashcam_sync/family_car/2026-11-22/bogus"
         )
 
 
@@ -113,7 +113,7 @@ async def test_clip_file_is_served_byte_for_byte(
     await synced(hass, stack)
     clip = next(
         c
-        for c in stack.daemon.cat.list_clips(camera="polestar_2")
+        for c in stack.daemon.cat.list_clips(camera="family_car")
         if c.kind.value == "event"
     )
     media = stack.media
@@ -133,7 +133,7 @@ async def test_actions_reach_the_real_app(hass: HomeAssistant, stack: Stack) -> 
     await synced(hass, stack)
     clip = next(
         c
-        for c in stack.daemon.cat.list_clips(camera="polestar_2")
+        for c in stack.daemon.cat.list_clips(camera="family_car")
         if c.kind.value == "normal"
     )
     content_id = f"media-source://dashcam_sync/clip/{clip.id}"
@@ -161,12 +161,12 @@ async def test_actions_reach_the_real_app(hass: HomeAssistant, stack: Stack) -> 
     # The camera still lists the file on its card: a new sync must not bring the clip back.
     stack.camera.requests_files.clear()  # type: ignore[attr-defined]
     await hass.services.async_call(
-        "button", "press", {"entity_id": "button.polestar_2_sync_now"}, blocking=True
+        "button", "press", {"entity_id": "button.family_car_sync_now"}, blocking=True
     )
     await wait_for(
         hass,
         lambda: (
-            stack.daemon.workers["polestar_2"].status.sync_status == "idle"
+            stack.daemon.workers["family_car"].status.sync_status == "idle"
             and len(stack.daemon.cat.recent_sessions(10)) >= 2
         ),
     )
@@ -174,7 +174,7 @@ async def test_actions_reach_the_real_app(hass: HomeAssistant, stack: Stack) -> 
     assert not path.exists()
     assert not any(str(clip.id) in str(u) for u in stack.camera.requests_files)  # type: ignore[attr-defined]
     assert all(
-        c.id != clip.id for c in stack.daemon.cat.list_clips(camera="polestar_2")
+        c.id != clip.id for c in stack.daemon.cat.list_clips(camera="family_car")
     )
 
 
@@ -183,23 +183,23 @@ async def test_switch_and_select_round_trip_through_the_app_options(
 ) -> None:
     await synced(hass, stack)
     await hass.services.async_call("select", "select_option",
-                                   {"entity_id": "select.polestar_2_sync_mode", "option": "events_only"}, blocking=True)  # fmt: skip
+                                   {"entity_id": "select.family_car_sync_mode", "option": "events_only"}, blocking=True)  # fmt: skip
     await wait_for(
         hass,
-        lambda: hass.states.get("select.polestar_2_sync_mode").state == "events_only",
+        lambda: hass.states.get("select.family_car_sync_mode").state == "events_only",
     )
-    assert stack.daemon.options.camera("polestar_2").sync_mode == "events_only"  # type: ignore[union-attr]
+    assert stack.daemon.options.camera("family_car").sync_mode == "events_only"  # type: ignore[union-attr]
 
     await hass.services.async_call(
         "switch",
         "turn_off",
-        {"entity_id": "switch.polestar_2_auto_sync"},
+        {"entity_id": "switch.family_car_auto_sync"},
         blocking=True,
     )
     await wait_for(
-        hass, lambda: hass.states.get("switch.polestar_2_auto_sync").state == "off"
+        hass, lambda: hass.states.get("switch.family_car_auto_sync").state == "off"
     )
-    assert stack.daemon.options.camera("polestar_2").enabled is False  # type: ignore[union-attr]
+    assert stack.daemon.options.camera("family_car").enabled is False  # type: ignore[union-attr]
 
 
 async def test_push_updates_arrive_from_the_real_websocket(
@@ -211,7 +211,7 @@ async def test_push_updates_arrive_from_the_real_websocket(
     events: list[dict] = []
     stack.entry.runtime_data.coordinator.async_add_event_listener(events.append)
     await hass.services.async_call(
-        "button", "press", {"entity_id": "button.polestar_2_sync_now"}, blocking=True
+        "button", "press", {"entity_id": "button.family_car_sync_now"}, blocking=True
     )
     await wait_for(hass, lambda: any(e.get("type") == "session" for e in events))
     assert any(
@@ -231,30 +231,30 @@ async def test_sync_now_when_out_of_range_is_a_clean_error(
     async def out_of_range(_camera: object) -> bool:
         return False
 
-    stack.daemon.workers["polestar_2"].ctx.link_up = out_of_range  # type: ignore[assignment]
+    stack.daemon.workers["family_car"].ctx.link_up = out_of_range  # type: ignore[assignment]
     await wait_for(
         hass,
-        lambda: hass.states.get("binary_sensor.polestar_2_connected").state == "off",
+        lambda: hass.states.get("binary_sensor.family_car_connected").state == "off",
         20,
     )
     with pytest.raises(HomeAssistantError, match="not connected"):
         await hass.services.async_call(
             "button",
             "press",
-            {"entity_id": "button.polestar_2_sync_now"},
+            {"entity_id": "button.family_car_sync_now"},
             blocking=True,
         )
 
 
 async def test_app_issues_become_repairs(hass: HomeAssistant, stack: Stack) -> None:
     await synced(hass, stack)
-    stack.daemon.workers["polestar_2"].status.unsupported = True
+    stack.daemon.workers["family_car"].status.unsupported = True
     await stack.entry.runtime_data.coordinator.async_refresh()
     registry = ir.async_get(hass)
     await wait_for(
         hass,
         lambda: (
-            registry.async_get_issue(DOMAIN, "unsupported_camera_polestar_2")
+            registry.async_get_issue(DOMAIN, "unsupported_camera_family_car")
             is not None
         ),
     )

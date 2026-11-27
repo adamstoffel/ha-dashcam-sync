@@ -27,8 +27,8 @@ from custom_components.dashcam_sync.const import (
 pytest_plugins = "pytest_homeassistant_custom_component"
 
 CAMERA: dict[str, Any] = {
-    "id": "polestar_2",
-    "name": "Polestar 2",
+    "id": "family_car",
+    "name": "Family car",
     "enabled": True,
     "connected": True,
     "sync_status": "idle",
@@ -57,7 +57,7 @@ STATUS: dict[str, Any] = {
     "api_version": 1,
     "app_version": "2026.11.0",
     "uptime": 100,
-    "cameras": {"polestar_2": CAMERA},
+    "cameras": {"family_car": CAMERA},
     "storage": {
         "mode": "local",
         "targets": {
@@ -84,7 +84,7 @@ STATUS: dict[str, Any] = {
 
 EVENT_CLIP: dict[str, Any] = {
     "id": 7,
-    "camera": "polestar_2",
+    "camera": "family_car",
     "size": 1000,
     "start": "2026-11-22T10:16:00+00:00",
     "kind": "event",
@@ -120,7 +120,7 @@ class FakeApi:
         self.error: Exception | None = None  # raised by every call when set
         self.status_error: Exception | None = None
         self.options: dict[str, Any] = {
-            "cameras": [{"id": "polestar_2", "connection": "hotspot", "interface": "wlan0"}]
+            "cameras": [{"id": "family_car", "connection": "hotspot", "interface": "wlan0"}]
         }
         self.wifi: dict[str, Any] = {
             "interface": "wlan0",
@@ -180,7 +180,7 @@ class FakeApi:
 
     async def async_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
         self._rec("sessions", limit)
-        return [{"id": 1, "camera": "polestar_2", "result": "ok", "clips": 2, "bytes": 10,
+        return [{"id": 1, "camera": "family_car", "result": "ok", "clips": 2, "bytes": 10,
                  "error": "link to 192.168.1.254 lost", "driver": "novatek"}]  # fmt: skip
 
     async def async_options(self) -> dict[str, Any]:

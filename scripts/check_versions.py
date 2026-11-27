@@ -20,7 +20,7 @@ def collect() -> dict[str, str]:
     found = {
         "integration manifest.json": json.loads(
             (
-                ROOT / "integration/custom_components/dashcam_sync/manifest.json"
+                ROOT / "custom_components/dashcam_sync/manifest.json"
             ).read_text()
         )["version"],
     }
