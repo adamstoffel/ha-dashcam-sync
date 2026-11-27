@@ -404,7 +404,7 @@ async function cameraDetail(id) {
 
 // ------------------------------------------------------------------ setup wizard
 
-const LIKELY_CAMERA = /cardv|dash|dvr|cam|viofo|70mai|vantrue|blackvue|nextbase|thinkware|garmin|redtiger|azdome|rexing|wolfbox|ddpai|^p2dc|dc[-_ ]?\w*$/i;
+const LIKELY_CAMERA = /cardv|dash|dvr|cam|viofo|70mai|vantrue|blackvue|nextbase|thinkware|garmin|redtiger|azdome|rexing|wolfbox|ddpai|dc[-_ ]?\w*$/i;
 
 async function wizard(existing) {
   const edit = !!existing;
@@ -498,7 +498,7 @@ async function wizard(existing) {
         <div class="hint">Leave empty to look for the camera automatically. Give it a DHCP reservation in your router so the address does not change.</div>
         <div id="w-det">${st.detection ? summary(st.detection) : ""}</div>`;
     } else if (step === 3) {
-      body = `<label for="w-name">Name</label><input id="w-name" name="camera-name" autocomplete="off" value="${esc(st.name)}" placeholder="Polestar 2">
+      body = `<label for="w-name">Name</label><input id="w-name" name="camera-name" autocomplete="off" value="${esc(st.name)}" placeholder="Family car">
         <details id="w-adv"><summary>Advanced</summary>
           <label for="w-driver">Driver</label><select id="w-driver">${Object.entries(DRIVERS).map(([k, t]) => `<option value="${k}" ${k === st.driver ? "selected" : ""}>${t}</option>`).join("")}</select>
           ${st.connection === "hotspot" ? `

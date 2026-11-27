@@ -54,7 +54,7 @@ Hub entities: local and network storage used and free, **Network storage** probl
 automation:
   - triggers:
       - trigger: state
-        entity_id: event.polestar_2_clip
+        entity_id: event.family_car_clip
         attribute: event_type
         to: event_clip
     actions:

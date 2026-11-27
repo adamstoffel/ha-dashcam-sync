@@ -165,7 +165,7 @@ python scripts/dev.py        # fake camera + daemon: panel on :8099, API on :810
 
 **Verified on real hardware** (one camera, one install):
 
-- An SGK GK720X dashcam (Viidure `/app` API, firmware `V7_X83_260126`) on Home Assistant OS 18.4 with Home Assistant 2026.11.3, x86-64, built-in Wi-Fi: the Wi-Fi join through the Supervisor (point-to-point addressing inside a 192.168.0.0/22 home network), detection, listing, downloads verified against the camera's own headers, remux, thumbnails and playback in the panel. Default route and DNS stayed on Ethernet throughout.
+- An SGK GK720X dashcam (Viidure `/app` API, firmware `V7_X83_260126`) on Home Assistant OS 18.4 with Home Assistant 2026.11.3, x86-64, built-in Wi-Fi: the Wi-Fi join through the Supervisor (point-to-point addressing, because the camera's range sits inside the home network and an address next to the camera was taken), detection, listing, downloads verified against the camera's own headers, remux, thumbnails and playback in the panel. Default route and DNS stayed on Ethernet throughout.
 - The app container reaches the camera on the host's Wi-Fi adapter without `host_network`, Core's Supervisor client works from the custom integration, and the app runs under its AppArmor profile.
 
 **Verified (automated, in CI):**

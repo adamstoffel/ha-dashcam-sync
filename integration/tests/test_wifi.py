@@ -141,7 +141,7 @@ async def test_apply_profile_point_to_point_names_the_camera_as_gateway(
     hass: HomeAssistant, hassio: MagicMock
 ) -> None:
     profile = wifi.profile_from_api(
-        {"interface": "wlan0", "ssid": "P2DC", "password": "pw123456",
+        {"interface": "wlan0", "ssid": "CARDV-5A3F", "password": "pw123456",
          "static_address": "192.168.0.254/32", "gateway": "192.168.0.1"}
     )  # fmt: skip
     assert profile.as_placeholders()["gateway"] == "192.168.0.1"
