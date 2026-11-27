@@ -27,8 +27,8 @@ async def test_setup_creates_devices_and_entities(
 ) -> None:
     assert loaded.state is ConfigEntryState.LOADED
     dev_reg = dr.async_get(hass)
-    hub = dev_reg.async_get_device(identifiers={(DOMAIN, loaded.entry_id)})
-    camera = dev_reg.async_get_device(identifiers={(DOMAIN, "polestar_2")})
+    hub = dev_reg.async_get_device_by_identifier((DOMAIN, loaded.entry_id), loaded.entry_id)
+    camera = dev_reg.async_get_device_by_identifier((DOMAIN, "polestar_2"), loaded.entry_id)
     assert hub is not None and camera is not None
     assert (
         camera.via_device_id == hub.id and camera.model == "NT96" and camera.sw_version == "FW-1.2"
@@ -198,10 +198,10 @@ async def test_a_camera_that_vanishes_is_unavailable_and_its_device_removable(
     from custom_components.dashcam_sync import async_remove_config_entry_device
 
     dev_reg = dr.async_get(hass)
-    device = dev_reg.async_get_device(identifiers={(DOMAIN, "polestar_2")})
+    device = dev_reg.async_get_device_by_identifier((DOMAIN, "polestar_2"), loaded.entry_id)
     assert device is not None
     assert await async_remove_config_entry_device(hass, loaded, device)
-    hub = dev_reg.async_get_device(identifiers={(DOMAIN, loaded.entry_id)})
+    hub = dev_reg.async_get_device_by_identifier((DOMAIN, loaded.entry_id), loaded.entry_id)
     assert hub is not None and not await async_remove_config_entry_device(
         hass, loaded, hub
     )  # never the hub

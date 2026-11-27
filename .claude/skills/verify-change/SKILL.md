@@ -12,7 +12,7 @@ A change is done when every check below that it touches passes, and a bug fix ha
 Two virtualenvs at the repo root (create with `scripts/dev.py` docs in CONTRIBUTING if missing):
 
 - `.venv-app`: the app (`app/`), Python 3.13, `pip install -e "app[dev]"`.
-- `.venv-ha`: the integration (`integration/`) and the end-to-end suite (`e2e/`), with `pytest-homeassistant-custom-component`.
+- `.venv-ha`: the integration (`integration/`) and the end-to-end suite (`e2e/`), Python 3.14 (what Home Assistant runs on), with `pytest-homeassistant-custom-component`.
 
 ## The checks
 

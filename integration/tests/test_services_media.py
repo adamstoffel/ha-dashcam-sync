@@ -83,14 +83,18 @@ async def test_service_errors_are_translated(
 async def test_sync_action_targets_devices_and_entities(
     hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi
 ) -> None:
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, "polestar_2")})
+    device = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, "polestar_2"), loaded.entry_id
+    )
     assert device is not None
     await hass.services.async_call(DOMAIN, "sync", {"device_id": device.id}, blocking=True)
     await hass.services.async_call(
         DOMAIN, "sync", {"entity_id": "sensor.polestar_2_sync_status"}, blocking=True
     )
     assert fake_api.calls_named("sync") == [("polestar_2",), ("polestar_2",)]
-    hub = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, loaded.entry_id)})
+    hub = dr.async_get(hass).async_get_device_by_identifier(
+        (DOMAIN, loaded.entry_id), loaded.entry_id
+    )
     assert hub is not None
     with pytest.raises(ServiceValidationError):  # the hub is not a camera
         await hass.services.async_call(DOMAIN, "sync", {"device_id": hub.id}, blocking=True)

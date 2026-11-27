@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from homeassistant.components.camera import Camera, CameraEntityFeature
+from homeassistant.components.camera import Camera
+from homeassistant.components.camera.const import CameraEntityFeature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback

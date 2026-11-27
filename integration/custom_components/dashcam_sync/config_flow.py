@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import voluptuous as vol
+import probatio as vol  # Home Assistant's validation engine since 2026.10
 from homeassistant.config_entries import (
     ConfigFlow,
     ConfigFlowResult,
