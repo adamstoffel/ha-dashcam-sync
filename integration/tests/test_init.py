@@ -27,7 +27,9 @@ async def test_setup_does_not_use_the_deprecated_via_device(
 ) -> None:
     """Home Assistant deprecated ``via_device`` for ``via_device_id`` (removed in 2027.8)."""
     assert loaded.state is ConfigEntryState.LOADED
-    assert "via_device" not in caplog.text
+    # The entry is set up by the ``loaded`` fixture, so its warnings are setup-phase records.
+    logged = [r.getMessage() for when in ("setup", "call") for r in caplog.get_records(when)]
+    assert not [m for m in logged if "via_device" in m]
     assert loaded.runtime_data.hub_device_id is not None
 
 
