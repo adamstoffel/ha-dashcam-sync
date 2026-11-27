@@ -1,0 +1,3 @@
+# The integration's lint and format settings live with its tests in integration/pyproject.toml.
+# HACS installs only custom_components/dashcam_sync/, so this file is never shipped.
+extend = "../integration/pyproject.toml"

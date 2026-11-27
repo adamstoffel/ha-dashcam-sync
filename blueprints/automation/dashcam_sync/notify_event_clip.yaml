@@ -5,7 +5,7 @@ blueprint:
     Dashcam Sync downloads a new event clip.
   domain: automation
   author: Dashcam Sync
-  source_url: https://github.com/adamstoffel/ha-dashcam-sync/blob/main/integration/blueprints/automation/dashcam_sync/notify_event_clip.yaml
+  source_url: https://github.com/adamstoffel/ha-dashcam-sync/blob/main/blueprints/automation/dashcam_sync/notify_event_clip.yaml
   homeassistant:
     min_version: 2026.11.0
   input:

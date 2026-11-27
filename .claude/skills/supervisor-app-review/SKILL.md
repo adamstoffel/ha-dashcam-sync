@@ -31,7 +31,7 @@ Every bug found by real-world testing so far came from a test fake that was kind
 ## Versions and local installs
 
 - A local app (in `/local_apps` or `/addons`) is rebuilt from source; the Supervisor reloads its metadata (schema, translations) only when the **version** changes. A pre-release suffix (`-dev`) sorts *older* than the installed release and disables Update. `scripts/install-on-ha.sh` sets `YYYY.M.<timestamp>`.
-- `homeassistant:` in config.yaml and `integration/hacs.json` is the minimum Home Assistant version; `scripts/check_ha_api.py` checks the integration's imports against it.
+- `homeassistant:` in config.yaml and the root `hacs.json` is the minimum Home Assistant version; `scripts/check_ha_api.py` checks the integration's imports against it.
 
 ## Discovery and the token
 

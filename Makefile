@@ -14,7 +14,7 @@ setup: ## Create both virtualenvs (Python 3.13) and install everything
 
 lint: ## ruff for the app, integration and scripts
 	cd app && ../$(VENV_APP)/bin/ruff check . && ../$(VENV_APP)/bin/ruff format --check .
-	cd integration && ../$(VENV_HA)/bin/ruff check . && ../$(VENV_HA)/bin/ruff format --check .
+	cd integration && ../$(VENV_HA)/bin/ruff check --config pyproject.toml . ../custom_components && ../$(VENV_HA)/bin/ruff format --check --config pyproject.toml . ../custom_components
 
 types: ## mypy --strict for the app and the integration
 	cd app && ../$(VENV_APP)/bin/mypy

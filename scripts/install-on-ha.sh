@@ -35,7 +35,7 @@ else
 fi
 
 src_app="$tmp/app/dashcam_sync"
-src_int="$tmp/integration/custom_components/dashcam_sync"
+src_int="$tmp/custom_components/dashcam_sync"
 for f in "$src_app/config.yaml" "$src_int/manifest.json"; do
   [ -f "$f" ] || { echo "The download for $REF has no ${f#"$tmp"/}; nothing was changed." >&2; exit 1; }
 done

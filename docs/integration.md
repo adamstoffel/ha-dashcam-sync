@@ -73,9 +73,9 @@ The integration is `local_push`. The app pushes every change over a WebSocket (`
 
 ## Blueprint
 
-[Notify on new dashcam event clip](blueprints/automation/dashcam_sync/notify_event_clip.yaml) sends a mobile notification with the thumbnail and a link to the clip.
+[Notify on new dashcam event clip](../blueprints/automation/dashcam_sync/notify_event_clip.yaml) sends a mobile notification with the thumbnail and a link to the clip.
 
-[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fadamstoffel%2Fha-dashcam-sync%2Fblob%2Fmain%2Fintegration%2Fblueprints%2Fautomation%2Fdashcam_sync%2Fnotify_event_clip.yaml)
+[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fadamstoffel%2Fha-dashcam-sync%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fdashcam_sync%2Fnotify_event_clip.yaml)
 
 ## Options
 

@@ -4,12 +4,14 @@ Thanks for helping. The most valuable contribution is **a driver for a camera fa
 
 ## Layout
 
-This repository is a monorepo that releases as two repositories (see `scripts/split_repos.sh`):
+One repository serves both install paths: the root `repository.yaml` makes it an app repository (the Supervisor finds `app/dashcam_sync`), and the root `hacs.json` with `custom_components/` makes it a HACS integration repository.
 
-| Directory | Becomes | Contents |
-| --- | --- | --- |
-| `app/` | `dashcam-sync-app` | The Home Assistant app: daemon, drivers, ingress panel |
-| `integration/` | `dashcam-sync-integration` | `custom_components/dashcam_sync`, blueprint, `hacs.json` |
+| Directory | Contents |
+| --- | --- |
+| `app/` | The Home Assistant app: daemon, drivers, ingress panel, and its tests |
+| `custom_components/dashcam_sync/` | The integration (HACS installs this folder) |
+| `integration/` | The integration's tests and tool settings; run its checks from here |
+| `e2e/`, `blueprints/`, `docs/`, `scripts/` | End-to-end suite, the notification blueprint, documentation, tooling |
 
 ## Set up
 
@@ -22,7 +24,7 @@ cd app && ruff check . && ruff format --check . && mypy && pytest --cov
 # Integration and end-to-end suite (Python 3.14, like Home Assistant itself)
 python3.14 -m venv .venv-ha && . .venv-ha/bin/activate
 pip install -r integration/requirements_test.txt PyTurboJPEG av numpy
-cd integration && ruff check . && pytest --cov
+cd integration && ruff check --config pyproject.toml . ../custom_components && mypy && pytest --cov
 ```
 
 ffmpeg is needed for the post-processing tests (they skip without it).

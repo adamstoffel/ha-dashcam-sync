@@ -53,9 +53,11 @@ jobs:
       - run: pip install -r integration/requirements_test.txt PyTurboJPEG av numpy
       - name: Lint
         working-directory: integration
+        # The integration's code is at the repository root (custom_components/), where
+        # HACS installs it from; its tests and tool settings live here.
         run: |
-          ruff check .
-          ruff format --check .
+          ruff check --config pyproject.toml . ../custom_components
+          ruff format --check --config pyproject.toml . ../custom_components
       - name: Types (mypy --strict)
         working-directory: integration
         run: pip install mypy && mypy
@@ -123,20 +125,25 @@ jobs:
         run: docker run --rm --entrypoint python3 dashcam-sync-app:ci -c "import dashcam_sync, shutil; print(dashcam_sync.__version__, shutil.which('ffmpeg'))"
 
   catalog-checks:
-    # The HACS action validates the layout of the remote repository itself, so it only
-    # makes sense in the split dashcam-sync-integration repository (see
-    # integration/.github/workflows/ci.yml). hassfest works on a staged copy here.
+    # One repository serves both: the Supervisor finds the app (app/dashcam_sync) through
+    # the root repository.yaml, HACS installs the integration from custom_components/.
     name: hassfest
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # The monorepo keeps the integration under integration/; the checks expect the
-      # layout of the release repository, so stage it at the workspace root.
-      - name: Stage the integration repository layout
-        run: |
-          cp -r integration/custom_components ./custom_components
-          cp integration/hacs.json ./hacs.json
       - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # GitHub topics are a repository setting (Settings > General > Topics) that
+          # only the owner can add. Remove this line once the repository has topics.
+          ignore: topics
 
   ha-api:
     # The tests run on the newest Home Assistant test package CI can install, which can be

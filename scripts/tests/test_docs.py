@@ -11,11 +11,9 @@ ROOT = Path(__file__).resolve().parents[2]
 DOCS = [
     *ROOT.glob("*.md"),
     *(ROOT / "docs").rglob("*.md"),
-    ROOT / "app" / "README.md",
     ROOT / "app" / "dashcam_sync" / "README.md",
     ROOT / "app" / "dashcam_sync" / "DOCS.md",
     ROOT / "app" / "dashcam_sync" / "CHANGELOG.md",
-    ROOT / "integration" / "README.md",
 ]
 LINK = re.compile(
     r"(?<!!)\[[^\]]*\]\(([^)\s]+)\)|!\[[^\]]*\]\(([^)\s]+)\)|<img[^>]+src=\"([^\"]+)\""
