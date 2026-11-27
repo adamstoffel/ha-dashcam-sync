@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import voluptuous as vol
-from homeassistant import data_entry_flow
-from homeassistant.components.repairs import RepairsFlow
+import probatio as vol  # Home Assistant's validation engine since 2026.10
+from homeassistant.components.repairs import RepairsFlow, RepairsFlowResult
 from homeassistant.core import HomeAssistant
 
 from .api import DashcamSyncError
@@ -20,14 +19,12 @@ class DashcamSyncFixFlow(RepairsFlow):
     def __init__(self, data: dict[str, Any]) -> None:
         self._data = data
 
-    async def async_step_init(
-        self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    async def async_step_init(self, user_input: dict[str, str] | None = None) -> RepairsFlowResult:
         return await self.async_step_confirm()
 
     async def async_step_confirm(
         self, user_input: dict[str, str] | None = None
-    ) -> data_entry_flow.FlowResult:
+    ) -> RepairsFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
             error = await self._async_fix()

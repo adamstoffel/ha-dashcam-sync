@@ -49,8 +49,10 @@ class DashcamSyncEntity(CoordinatorEntity[DashcamSyncCoordinator]):
                 manufacturer="Dashcam Sync",
                 model=status.get("model") or status.get("driver"),
                 sw_version=status.get("firmware"),
-                via_device=(DOMAIN, entry.entry_id),
             )
+            hub_device_id = getattr(getattr(entry, "runtime_data", None), "hub_device_id", None)
+            if hub_device_id:
+                self._attr_device_info["via_device_id"] = hub_device_id
 
     @property
     def camera_status(self) -> dict[str, Any]:

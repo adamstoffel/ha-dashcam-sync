@@ -19,8 +19,8 @@ python3.13 -m venv .venv-app && . .venv-app/bin/activate
 pip install -e "app[dev]"
 cd app && ruff check . && ruff format --check . && mypy && pytest --cov
 
-# Integration (Python 3.13)
-python3.13 -m venv .venv-ha && . .venv-ha/bin/activate
+# Integration and end-to-end suite (Python 3.14, like Home Assistant itself)
+python3.14 -m venv .venv-ha && . .venv-ha/bin/activate
 pip install -r integration/requirements_test.txt PyTurboJPEG av numpy
 cd integration && ruff check . && pytest --cov
 ```

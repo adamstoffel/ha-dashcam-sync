@@ -22,6 +22,6 @@ select = ["E", "F", "W", "I", "UP", "B", "ASYNC", "RUF", "C4", "PT"]
 ignore = ["E501", "B904", "RUF012", "PT018", "PT011", "RUF029"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.14"
 strict = true
 files = ["custom_components/dashcam_sync"]

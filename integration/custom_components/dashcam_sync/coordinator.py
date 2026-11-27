@@ -290,3 +290,5 @@ class DashcamSyncRuntimeData:
     api: DashcamSyncApi
     coordinator: DashcamSyncCoordinator
     cleanups: list[Callable[[], None]] = field(default_factory=list)
+    # The hub's device id: camera devices name it as via_device_id.
+    hub_device_id: str | None = None
