@@ -22,6 +22,15 @@ from custom_components.dashcam_sync.const import DOMAIN, POLL_INTERVAL
 from .conftest import CAMERA, FakeApi, setup_entry
 
 
+async def test_setup_does_not_use_the_deprecated_via_device(
+    hass: HomeAssistant, loaded: MockConfigEntry, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Home Assistant deprecated ``via_device`` for ``via_device_id`` (removed in 2027.8)."""
+    assert loaded.state is ConfigEntryState.LOADED
+    assert "via_device" not in caplog.text
+    assert loaded.runtime_data.hub_device_id is not None
+
+
 async def test_setup_creates_devices_and_entities(
     hass: HomeAssistant, loaded: MockConfigEntry
 ) -> None:
