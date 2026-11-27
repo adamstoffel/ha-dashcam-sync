@@ -19,7 +19,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/clips.png" alt="The Dashcam Sync panel showing synced clips with thumbnails and a playing video" width="820">
+  <img src="docs/images/clips.png" alt="The Dashcam Sync panel listing synced dashcam clips with thumbnails" width="820">
 </p>
 
 ## Contents
@@ -61,7 +61,7 @@ Honest expectations: hotspot transfers are slow (often under 1 MB/s) and most mi
 
 | | |
 | --- | --- |
-| <img src="docs/images/overview.png" alt="Overview page"><br>**Overview**: every camera's state, speed and queue, plus storage health and any repair issues. | <img src="docs/images/cameras.png" alt="Cameras page with the setup wizard"><br>**Cameras**: the setup wizard probes the camera, detects its driver and computes the address block. |
+| <img src="docs/images/overview.png" alt="Overview page"><br>**Overview**: every camera's state, speed and queue, plus storage health and any repair issues. | <img src="docs/images/cameras-wizard.png" alt="The Add camera wizard after detecting a camera"><br>**Cameras**: the setup wizard probes the camera, detects its driver and picks Home Assistant's address on the camera network. |
 | <img src="docs/images/storage.png" alt="Storage page"><br>**Storage**: where clips are kept and moving them, retention, and a dry run that lists exactly what the next purge would delete. | <img src="docs/images/logs.png" alt="Logs page"><br>**Logs**: the app's own log, so you can diagnose without leaving Home Assistant. |
 
 ## How it fits together

@@ -58,12 +58,24 @@ async function waitFor(fn, what, timeout = 30000) {
     page.on("pageerror", (e) => failures.push("page error: " + e.message));
     page.on("requestfailed", (r) => failures.push("request failed: " + r.url() + " " + (r.failure() || {}).errorText));
     page.on("response", (r) => { if (r.status() >= 400 && !r.url().endsWith("/thumb")) failures.push(`HTTP ${r.status()} ${r.url()}`); });
-    const shot = async (name) => { if (SCREENS) { fs.mkdirSync(SCREENS, { recursive: true }); await page.screenshot({ path: path.join(SCREENS, name + ".png") }); } };
+    // Documentation screenshots show what a real install shows, not the test harness:
+    // the fake camera's loopback address, the temporary media folder, a spare interface.
+    const realistic = () => page.evaluate(() => {
+      const swaps = [[/127\.0\.0\.1:\d+/g, "192.168.1.254"], [/\/tmp\/dashcam-demo\/media/g, "/media"], [/\bwlan9\b/g, "wlan0"]];
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        let t = n.nodeValue; for (const [re, to] of swaps) t = t.replace(re, to);
+        if (t !== n.nodeValue) n.nodeValue = t;
+      }
+      for (const el of document.querySelectorAll("input")) { for (const [re, to] of swaps) el.value = el.value.replace(re, to); }
+      const toast = document.getElementById("toast"); if (toast) toast.hidden = true;
+    });
+    const shot = async (name) => { if (SCREENS) { fs.mkdirSync(SCREENS, { recursive: true }); await realistic(); await page.screenshot({ path: path.join(SCREENS, name + ".png") }); } };
 
     // ---- Overview: the fake camera syncs on its own.
     await page.goto(PANEL);
     assert.equal(await page.title(), "Dashcam Sync");
-    await page.waitForSelector(".cam-card .name:text('Fake dashcam')");
+    await page.waitForSelector(".cam-card .name:text('Family car')");
     await waitFor(async () => /last sync (?!never)/.test(await page.locator("main").innerText()), "the first sync to finish");
     const overview = await page.locator("main").innerText();
     assert.match(overview, /connected/);
@@ -81,7 +93,7 @@ async function waitFor(fn, what, timeout = 30000) {
     await page.click("main .card[data-id] button:text('Play') >> nth=0");
     const video = page.locator("dialog#player video");
     await video.waitFor();
-    await waitFor(() => video.evaluate((v) => v.readyState >= 2 && v.videoWidth === 640), "the video to load");
+    await waitFor(() => video.evaluate((v) => v.readyState >= 2 && v.videoWidth > 0), "the video to load");
     await page.click("dialog#player .dlg-close");
     await shot("clips");
 
@@ -164,14 +176,14 @@ async function waitFor(fn, what, timeout = 30000) {
     await page.click("#w-probe");
     await waitFor(async () => /Detected a novatek camera/.test(await page.locator("#w-det").innerText().catch(() => "")), "the wizard to detect the driver");
     await page.click("#w-next");
-    await page.fill("#w-name", "Garage cam");
-    assert.equal(await page.locator("#w-adv input[disabled]").inputValue(), "garage_cam", "the ID follows the name");
+    await page.fill("#w-name", "Second car");
+    assert.equal(await page.locator("#w-adv input[disabled]").inputValue(), "second_car", "the ID follows the name");
     await page.click("#w-next");
     await page.waitForSelector("#w-done");
     assert.match(await page.locator("#w-connect").innerText(), /Detected a novatek camera/);
     await shot("cameras-wizard");
     await page.click("#w-done");
-    await waitFor(async () => /Garage cam/.test(await page.locator("main").innerText()), "the new camera to be listed");
+    await waitFor(async () => /Second car/.test(await page.locator("main").innerText()), "the new camera to be listed");
     assert.match(await page.locator("main").innerText(), /Local network · 127\.0\.0\.1:\d+/);
 
     // A hotspot camera: no Home Assistant to ask here, so the exact profile is shown.
@@ -224,7 +236,7 @@ async function waitFor(fn, what, timeout = 30000) {
     await shot("cameras");
 
     // A camera's detail view: status and its recent syncs.
-    await page.locator("main .card[data-id=fake]").click({ position: { x: 20, y: 20 } }).catch(async () => {
+    await page.locator("main .card[data-id=family_car]").click({ position: { x: 20, y: 20 } }).catch(async () => {
       await page.locator("main .cam-card").first().click({ position: { x: 20, y: 20 } });
     });
     await page.waitForSelector("h2:text('Recent syncs')");

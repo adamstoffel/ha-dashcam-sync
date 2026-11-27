@@ -11,10 +11,13 @@ You need two My Home Assistant links: one to add the app repository, one to inst
 
 1. **Add the app repository.** Open <https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Fadamstoffel%2Fha-dashcam-sync> and confirm, or add the URL under **Settings › Apps › App store › Repositories**.
 2. **Install and start the app.** Open **Dashcam Sync** in the store, install it and start it. It appears in the sidebar.
-3. **Install the integration.** Open <https://my.home-assistant.io/redirect/hacs_repository/?owner=adamstoffel&repository=ha-dashcam-sync&category=integration>, or in HACS add `https://github.com/adamstoffel/ha-dashcam-sync` as a custom repository of type *Integration* (it is not in the default list yet). Download **Dashcam Sync**, restart Home Assistant, then confirm the discovered **Dashcam Sync** device under **Settings › Devices & services**.
+3. **Install the integration.** Open <https://my.home-assistant.io/redirect/hacs_repository/?owner=adamstoffel&repository=ha-dashcam-sync&category=integration>, or in HACS add `https://github.com/adamstoffel/ha-dashcam-sync` as a custom repository of type *Integration* (it is not in the default list yet). Download **Dashcam Sync** and restart Home Assistant.
 4. **Confirm discovery.** Under **Settings › Devices & services**, accept **Dashcam Sync discovered**. If nothing is discovered, add the integration manually with host `local-dashcam-sync`, port `8100` and a token you choose: set **Integration token** (32+ characters) on the app's Configuration tab and restart the app. See the app's documentation.
-5. **Add your camera.** Open **Dashcam Sync** from the sidebar › **Cameras › Add camera**. Choose *camera's own Wi-Fi* or *camera on my home network*, scan or type the camera's Wi-Fi name and password, press **Probe camera**, then **Save**.
-6. **Join the hotspot (hotspot cameras).** Under **Settings › Devices & services › Dashcam Sync › Configure › Connect a camera's Wi-Fi**, pick the camera. The flow checks the reserved address block first, then writes the Wi-Fi profile. If Home Assistant cannot change it, the flow shows the exact values to type under **Settings › System › Network**.
+5. **Add your camera.** Open **Dashcam Sync** from the sidebar › **Cameras › Add camera**. Choose **Camera hotspot** (the camera runs its own Wi-Fi) or **Local network**. For a hotspot, pick the Wi-Fi interface, press **Scan** to choose the camera's network, enter its password and the camera's IP; for the local network, enter the camera's address and press **Test**. Name it and press **Save and connect**.
+
+   <img src="images/cameras-wizard.png" alt="The Add camera wizard after detecting a camera" width="640">
+
+6. **Connect.** For a hotspot camera, Home Assistant joins the camera's Wi-Fi on that interface. The wizard checks your home network first and only claims addresses that are free: a small block of four around the camera, or two (point-to-point) if one of those is taken. If Home Assistant cannot change the Wi-Fi itself, the wizard shows the exact values to type under **Settings › System › Network**.
 7. **Drive.** When the car comes in range the app connects, syncs event clips first, and puts the camera back into recording. The clips appear under **Media › Dashcam Sync**.
 
 ### Wi-Fi adapter guidance
@@ -22,6 +25,8 @@ You need two My Home Assistant links: one to add the app repository, one to inst
 A hotspot camera needs a Wi-Fi adapter that Home Assistant OS has a driver for. If the repair issue *No Wi-Fi adapter* appears, the built-in card has no driver: use a supported USB adapter, or use a camera that can join your home network (station mode). Range to the parking spot matters more than anything else for transfer speed. Each hotspot camera needs its own adapter. If the adapter is also enabled under **Settings › System › Network › Network adapter**, turn that off so Home Assistant does not announce itself on the camera's network.
 
 ### Which clips do I get?
+
+<img src="images/settings.png" alt="The Settings page with sync, storage and retention options" width="640">
 
 | Sync mode | Fetches |
 | --- | --- |
