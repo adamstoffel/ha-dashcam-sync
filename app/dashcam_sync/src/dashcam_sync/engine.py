@@ -24,10 +24,12 @@ import aiohttp
 from .catalog import TARGET_LOCAL, Catalog, ClipRow
 from .detect import Detection, candidate_hosts, detect
 from .drivers import DRIVER_BY_NAME, BaseDriver
-from .drivers.http import CameraHttp
+from .drivers.http import ByteStream, CameraHttp
 from .errors import (
     CameraError,
+    Incomplete,
     LinkLost,
+    NothingBeyond,
     ProtocolError,
     StorageError,
     StorageFull,
@@ -38,7 +40,7 @@ from .models import CHANNEL_ORDER, Kind, Recording
 from .options import CameraOptions, SyncMode, SyncOptions
 from .postprocess import PostProcessor
 from .restoreflag import RestoreFlags
-from .storage import PARTIAL_DIR, Destination, StorageManager
+from .storage import PARTIAL_DIR, Destination, StorageManager, clip_relative_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -191,6 +193,7 @@ class SessionStats:
     clips: int = 0
     bytes: int = 0
     failures: int = 0
+    resumed: int = 0
     result: str = "ok"
     error: str | None = None
 
@@ -213,6 +216,7 @@ class CameraWorker:
         self._need_relink = False
         self._synced_this_link = False
         self._remaining_base = 0
+        self._estimates: dict[int, int] = {}
         self.status.restore_pending = ctx.flags.get(camera.id) is not None
         self._restore_persisted_state()
 
@@ -487,6 +491,8 @@ class CameraWorker:
             except ProtocolError as err:
                 stats.result, stats.error = "list_failed", str(err)
                 raise
+            if driver.listing_complete:
+                self._drop_vanished_partials(recs)
             await self._download_all(driver, recs, stats)
         except UnsupportedCamera as err:
             stats.result, stats.error = "unsupported", str(err)
@@ -519,6 +525,16 @@ class CameraWorker:
     def _finish(self, session_id: int, driver: BaseDriver | None, stats: SessionStats) -> None:
         self.ctx.catalog.end_session(
             session_id, stats.result, stats.clips, stats.bytes, stats.error
+        )
+        _LOGGER.info(
+            "%s: session %s: %d clip(s), %.1f MB, %d resumed, %d failed%s",
+            self.camera.id,
+            stats.result,
+            stats.clips,
+            stats.bytes / 1e6,
+            stats.resumed,
+            stats.failures,
+            f" ({stats.error})" if stats.error else "",
         )
         status = self.status
         status.current_file = None
@@ -556,11 +572,13 @@ class CameraWorker:
         pending: list[tuple[Recording, ClipRow]] = []
         for rec in build_queue(recs, mode, sync.recent_minutes):
             if catalog.is_known_done(self.camera.id, rec):
+                catalog.refresh_listing(self.camera.id, rec)
                 continue
             row, _ = catalog.upsert_recording(self.camera.id, rec)
             pending.append((rec, row))
 
-        self._remaining_base = sum(r.size for r, _ in pending)
+        self._remaining_base = sum(r.size_estimate for r, _ in pending)
+        self._estimates = {row.id: r.size_estimate for r, row in pending}
         self.status.clips_remaining = len(pending)
         self.status.bytes_remaining = self._remaining_base
         self.status.eta_seconds = None
@@ -581,14 +599,18 @@ class CameraWorker:
                 catalog.mark_failed(row.id, str(err))
                 stats.failures += 1
                 failures_in_row += 1
-                self._remaining_base = max(0, self._remaining_base - rec.size)
+                self._remaining_base = max(
+                    0, self._remaining_base - self._estimates.pop(row.id, rec.size_estimate)
+                )
                 self.status.clips_remaining = max(0, self.status.clips_remaining - 1)
                 if failures_in_row >= MAX_CONSECUTIVE_FILE_FAILURES:
                     stats.result, stats.error = "error", str(err)
                     raise CameraError(str(err)) from err
                 continue
             failures_in_row = 0
-            self._remaining_base = max(0, self._remaining_base - rec.size)
+            self._remaining_base = max(
+                0, self._remaining_base - self._estimates.pop(row.id, rec.size_estimate)
+            )
             self.status.clips_remaining = max(0, self.status.clips_remaining - 1)
             self.status.bytes_remaining = self._remaining_base
             self._update_eta()
@@ -596,6 +618,43 @@ class CameraWorker:
         if stats.failures and stats.result == "ok":
             stats.result = "partial"
             stats.error = f"{stats.failures} clip(s) failed"
+
+    def _drop_vanished_partials(self, recs: list[Recording]) -> None:
+        """Delete partial downloads of clips the camera no longer lists.
+
+        A loop-recording camera overwrites its oldest files, so a clip interrupted
+        on an earlier visit can be gone by the next one. Nothing can ever finish it,
+        yet the catalogue keeps referencing its partial file, so it would sit on the
+        disk for good. Only a complete listing proves a file is gone (the caller checks
+        ``driver.listing_complete``), and an empty one is not trusted either: that is
+        more likely a glitch than a camera with nothing on it.
+        """
+        if not recs:
+            return
+        catalog = self.ctx.catalog
+        for row in catalog.unfinished_not_listed(self.camera.id, recs):
+            if not row.offset and not row.part_path:
+                continue
+            if row.part_path:
+                Path(row.part_path).unlink(missing_ok=True)
+            catalog.reset_clip(row.id)
+            _LOGGER.info(
+                "%s: %s is no longer on the camera; dropped its %d-byte partial download",
+                self.camera.id,
+                row.src_path,
+                row.offset,
+            )
+
+    def _learn_size(self, clip_id: int, stream: ByteStream) -> None:
+        """Replace a clip's estimated size by what the download says, for progress."""
+        actual = stream.total
+        if actual is None and stream.content_length is not None:
+            actual = stream.start + stream.content_length
+        estimate = self._estimates.get(clip_id)
+        if actual is None or estimate is None or actual == estimate:
+            return
+        self._remaining_base = max(0, self._remaining_base + actual - estimate)
+        self._estimates[clip_id] = actual
 
     def _update_eta(self) -> None:
         speed = self.status.speed_bps
@@ -606,14 +665,48 @@ class CameraWorker:
     ) -> None:
         storage = self.ctx.storage()
         catalog = self.ctx.catalog
-        dest = await asyncio.to_thread(storage.primary_destination, rec.size)
+        dest = await asyncio.to_thread(storage.primary_destination, rec.size_estimate)
+        adopted = self._adopt_placed(rec, row, dest)
+        if adopted is not None:
+            digest = await asyncio.to_thread(_sha256, adopted)
+            await self._complete(driver, rec, row, dest, adopted, digest, stats)
+            return
         part = self._part_path(row, dest)
         part.parent.mkdir(parents=True, exist_ok=True)
 
         offset = min(row.offset, part.stat().st_size) if part.exists() else 0
-        if offset > rec.size:
+        if rec.size and offset > rec.size:
             offset = 0
-        stream = await driver.open(rec, offset)
+        try:
+            stream = await driver.open(rec, offset)
+        except NothingBeyond as err:
+            if offset <= 0:
+                raise
+            # The part already holds every byte (a crash or failed confirmation after
+            # the last one): the 416 is the camera confirming there is nothing more.
+            claims = {"listing": rec.size or None, "416 total": err.total}
+            if any(v is not None and v != offset for v in claims.values()):
+                self._discard(part, row)
+                raise ProtocolError(f"the saved part ({offset} bytes) disagrees: {claims}") from err
+            # Only the bytes up to the saved offset are confirmed: drop any written after
+            # the last checkpoint before a crash.
+            with part.open("r+b") as fh:
+                fh.truncate(offset)
+                fh.flush()
+                os.fsync(fh.fileno())
+            await self._place_part(driver, rec, row, dest, part, stats)
+            stats.resumed += 1
+            _LOGGER.info(
+                "%s: finished %s after a resume (all %d bytes were already saved)",
+                self.camera.id,
+                rec.path,
+                offset,
+            )
+            return
+        self._learn_size(row.id, stream)
+        resumed_at = offset if offset > 0 and stream.start == offset else 0
+        if resumed_at:
+            _LOGGER.info("%s: resuming %s at byte %d", self.camera.id, rec.path, resumed_at)
         try:
             if stream.start != offset:
                 # The camera ignored Range and answered 200: start over.
@@ -658,29 +751,139 @@ class CameraWorker:
             # Keep the partial file and its offset: the next visit resumes it.
             with contextlib.suppress(Exception):
                 await stream.aclose()
+            saved = catalog.get_clip(row.id)
+            if saved is not None and saved.offset > 0:
+                _LOGGER.info(
+                    "%s: kept %d bytes of %s; it resumes on the next visit",
+                    self.camera.id,
+                    saved.offset,
+                    rec.path,
+                )
             raise
         await stream.aclose()
 
         size = part.stat().st_size
-        expected_total = (
-            stream.start + stream.content_length if stream.content_length is not None else None
-        )
-        if rec.size and size != rec.size:
+        wrote = size - offset
+        claims = {
+            "listing": rec.size or None,
+            "Content-Range": stream.total,
+            "Content-Length": (
+                stream.start + stream.content_length if stream.content_length is not None else None
+            ),
+        }
+        known = {k: v for k, v in claims.items() if v is not None}
+        if len(set(known.values())) > 1:
             self._discard(part, row)
-            raise ProtocolError(f"size {size} does not match listing {rec.size}")
-        if expected_total is not None and size != expected_total:
+            raise ProtocolError(f"the camera's sizes disagree: {known}")
+        expected = next(iter(known.values()), None)
+        if expected is not None and size > expected:
             self._discard(part, row)
-            raise ProtocolError(f"size {size} does not match Content-Length {expected_total}")
+            raise ProtocolError(f"got {size} bytes, expected {expected}")
+        if expected is not None and size < expected:
+            if wrote <= 0:
+                # Resuming made no progress: the file on the card is not what was listed.
+                self._discard(part, row)
+                raise ProtocolError(f"the camera stops at {size} of {expected} bytes")
+            # A clean end before the last byte is almost always the link going away.
+            raise Incomplete(f"stopped at {size} of {expected} bytes; resumes next time")
+        if expected is None:
+            await self._confirm_end(driver, rec, size)
+        await self._place_part(driver, rec, row, dest, part, stats)
+        if resumed_at:
+            stats.resumed += 1
+            _LOGGER.info(
+                "%s: finished %s after a resume (%d bytes, resumed at %d)",
+                self.camera.id,
+                rec.path,
+                size,
+                resumed_at,
+            )
 
+    async def _place_part(
+        self,
+        driver: BaseDriver,
+        rec: Recording,
+        row: ClipRow,
+        dest: Destination,
+        part: Path,
+        stats: SessionStats,
+    ) -> None:
+        """Hash, place and record a verified part file."""
         digest = await asyncio.to_thread(_sha256, part)
-        final = storage.place(self.camera.id, rec, part, dest)
-        catalog.complete_clip(
+        storage = self.ctx.storage()
+        # Saved first, so a crash after placing can still adopt the file: its verified
+        # size (the listing may give none) and the exact name chosen (it may be a _2).
+        self.ctx.catalog.set_verified_size(row.id, part.stat().st_size)
+        final = storage.final_path(self.camera.id, rec, dest)
+        self.ctx.catalog.kv_set(_placing_key(row.id), str(final))
+        final = storage.place(self.camera.id, rec, part, dest, final)
+        await self._complete(driver, rec, row, dest, final, digest, stats)
+        self.ctx.catalog.kv_delete(_placing_key(row.id))
+
+    async def _complete(
+        self,
+        driver: BaseDriver,
+        rec: Recording,
+        row: ClipRow,
+        dest: Destination,
+        final: Path,
+        digest: str,
+        stats: SessionStats,
+    ) -> None:
+        storage = self.ctx.storage()
+        self.ctx.catalog.complete_clip(
             row.id, sha256=digest, target=dest.kind, path=str(final), size=final.stat().st_size
         )
         stats.clips += 1
         self.ctx.post.submit(row.id, final)
         storage.queue_network_copy(row.id)
         await self._delete_from_camera(driver, rec)
+
+    async def _confirm_end(self, driver: BaseDriver, rec: Recording, size: int) -> None:
+        """No size was given anywhere: ask for the bytes after the end before trusting it.
+
+        A body without a length ends at a closed connection, which a dropped link looks
+        exactly like, so the camera has to confirm there is nothing more.
+        """
+        try:
+            probe = await driver.open(rec, size)
+        except NothingBeyond as err:
+            # 416: nothing at or after our last byte. That proves the end only when any
+            # size it states is ours (bytes */N with N == size).
+            if err.total is not None and err.total != size:
+                raise ProtocolError(
+                    f"the camera says the file has {err.total} bytes, we have {size}"
+                ) from err
+            return
+        try:
+            if probe.range_honored and probe.start == size:
+                async for chunk in probe:
+                    if chunk:
+                        raise Incomplete(f"the camera has more after byte {size}")
+                return  # an empty partial answer: nothing more
+            if probe.total == size:
+                return  # a whole-file answer that states the same size
+        finally:
+            await probe.aclose()
+        raise ProtocolError("the camera gives no size, so the download cannot be confirmed")
+
+    def _adopt_placed(self, rec: Recording, row: ClipRow, dest: Destination) -> Path | None:
+        """A file a crashed run moved into place but never recorded."""
+        size = rec.size or row.size  # row.size: the verified size saved before placing
+        if not row.part_path or Path(row.part_path).exists() or not size:
+            return None
+        placing = self.ctx.catalog.kv_get(_placing_key(row.id))
+        candidate = (
+            Path(placing) if placing else dest.target.root / clip_relative_path(self.camera.id, rec)
+        )
+        try:
+            if candidate.stat().st_size != size:
+                return None
+        except OSError:
+            return None
+        if self.ctx.catalog.path_in_use(str(candidate)):
+            return None
+        return candidate
 
     def _part_path(self, row: ClipRow, dest: Destination) -> Path:
         if row.part_path and Path(row.part_path).exists():
@@ -730,3 +933,8 @@ __all__ = [
     "Timing",
     "build_queue",
 ]
+
+
+def _placing_key(clip_id: int) -> str:
+    """Catalogue key holding the exact path a clip is being placed at."""
+    return f"placing:{clip_id}"

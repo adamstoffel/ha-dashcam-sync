@@ -9,6 +9,7 @@ silently fills local disk), every write is preceded by a mount health check.
 from __future__ import annotations
 
 import datetime as dt
+import filecmp
 import logging
 import os
 import shutil
@@ -32,6 +33,12 @@ from .options import StorageOptions
 _LOGGER = logging.getLogger(__name__)
 
 NETWORK_FSTYPES = frozenset({"cifs", "smb3", "nfs", "nfs4"})
+# Home Assistant's "Local disk" storage (Settings > System > Storage) supports these.
+# ntfs3 is the kernel NTFS driver; fuseblk is how ntfs-3g shows up.
+LOCAL_DISK_FSTYPES = frozenset(
+    {"ext2", "ext3", "ext4", "vfat", "exfat", "ntfs", "ntfs3", "fuseblk", "btrfs", "f2fs"}
+)
+STORAGE_FSTYPES = NETWORK_FSTYPES | LOCAL_DISK_FSTYPES
 PARTIAL_DIR = ".partial"
 SPOOL_DIR = ".spool"
 SIDECAR_SUFFIXES = (".jpg", ".json")
@@ -67,9 +74,52 @@ def mount_fstype(path: Path | str, mountinfo: str | None = None) -> str | None:
     return None
 
 
-def is_network_mount(path: Path | str, mountinfo: str | None = None) -> bool:
+def is_storage_mount(path: Path | str, mountinfo: str | None = None) -> bool:
+    """A network share or an added local disk is mounted at exactly ``path``.
+
+    "Exactly" is what keeps this safe for local disk file systems too: when the share or
+    disk is missing, the Supervisor leaves an empty folder on the data disk, which is not
+    a mount point of its own, so writing there (and silently filling the data disk) is
+    refused.
+    """
     fstype = mount_fstype(path, mountinfo)
-    return fstype is not None and fstype.lower() in NETWORK_FSTYPES
+    return fstype is not None and fstype.lower() in STORAGE_FSTYPES
+
+
+def attached_storage(
+    media_root: Path, share_root: Path, mountinfo: str | None = None
+) -> list[dict[str, str]]:
+    """Network shares and local disks Home Assistant has attached for media or share use.
+
+    These are the names ``network_folder`` accepts: a mount directly below ``/media`` or
+    ``/share`` with a file system Home Assistant mounts there.
+    """
+    if mountinfo is None:
+        try:
+            mountinfo = Path("/proc/self/mountinfo").read_text("utf-8")
+        except OSError:
+            return []
+    found: dict[str, dict[str, str]] = {}
+    for line in mountinfo.splitlines():
+        left, sep, right = line.partition(" - ")
+        fields, rfields = left.split(), right.split()
+        if not sep or len(fields) < 5 or not rfields:
+            continue
+        point = Path(_unescape_mount(fields[4]))
+        fstype = rfields[0].lower()
+        if fstype not in STORAGE_FSTYPES:
+            continue
+        for usage, root in (("media", media_root), ("share", share_root)):
+            if point.parent == root:
+                kind = "network" if fstype in NETWORK_FSTYPES else "disk"
+                found[point.name] = {
+                    "name": point.name,
+                    "path": str(point),
+                    "usage": usage,
+                    "kind": kind,
+                    "fstype": fstype,
+                }
+    return sorted(found.values(), key=lambda m: m["name"])
 
 
 @dataclass(slots=True)
@@ -132,7 +182,7 @@ class Target:
     def mount_ok(self) -> bool:
         if not self.needs_mount:
             return True
-        return is_network_mount(self.root, self._mountinfo)
+        return is_storage_mount(self.root, self._mountinfo)
 
     def check(self, catalog: Catalog | None = None) -> TargetHealth:
         """Mount check, write+delete probe, and free space."""
@@ -222,12 +272,43 @@ def remove_clip_files(path: Path) -> int:
     return freed
 
 
+# camera/YYYY/MM/DD/kind/file: the layout every target shares.
+LAYOUT_DEPTH = 6
+
+
+def layout_relative(path: Path, camera: str) -> Path:
+    """A clip's path below its storage root, recovered from the shared folder layout."""
+    parts = path.parts
+    if len(parts) >= LAYOUT_DEPTH and parts[-LAYOUT_DEPTH] == camera:
+        return Path(*parts[-LAYOUT_DEPTH:])
+    return Path(camera) / path.name
+
+
 def _relative_or_name(path: Path, root: Path, camera_id: str) -> Path:
-    """``path`` relative to ``root``; if the root changed (``local_folder`` edited), keep the name."""
+    """``path`` relative to ``root``; if the root changed (``local_folder`` edited), the layout."""
     try:
         return path.relative_to(root)
     except ValueError:
-        return Path(camera_id) / path.name
+        return layout_relative(path, camera_id)
+
+
+def reuse_or_unique(dst: Path, src: Path) -> Path:
+    """``dst``, or a free name next to it, unless ``dst`` is a finished copy of ``src``.
+
+    A copy that was fully written before a crash, but never recorded, is byte for byte the
+    source: reusing it avoids a ``_2`` duplicate on the next run. Same size alone is not
+    enough (two clips can share a name and a size), so the bytes are compared.
+    """
+    try:
+        if (
+            dst.is_file()
+            and dst.stat().st_size == src.stat().st_size
+            and filecmp.cmp(dst, src, shallow=False)
+        ):
+            return dst
+    except OSError:
+        pass
+    return unique_path(dst)
 
 
 def move_file(src: Path, dst: Path) -> None:
@@ -294,13 +375,13 @@ class StorageManager:
         """``/media/<name>`` for Media shares, ``/share/<name>`` for Share ones."""
         candidates = [self.media_root / folder, self.share_root / folder]
         for candidate in candidates:
-            if is_network_mount(candidate, self._mountinfo):
+            if is_storage_mount(candidate, self._mountinfo):
                 return candidate
         return candidates[0]
 
     def network_mount_ok(self, folder: str) -> bool:
         return any(
-            is_network_mount(root / folder, self._mountinfo)
+            is_storage_mount(root / folder, self._mountinfo)
             for root in (self.media_root, self.share_root)
         )
 
@@ -343,9 +424,20 @@ class StorageManager:
 
     # ----------------------------------------------------------------- placing
 
-    def place(self, camera_id: str, rec: Recording, part: Path, dest: Destination) -> Path:
+    def final_path(self, camera_id: str, rec: Recording, dest: Destination) -> Path:
+        """Where ``place`` will put the clip: its layout path, or a free name next to it."""
+        return unique_path(dest.target.root / clip_relative_path(camera_id, rec))
+
+    def place(
+        self,
+        camera_id: str,
+        rec: Recording,
+        part: Path,
+        dest: Destination,
+        final: Path | None = None,
+    ) -> Path:
         """Atomically move a verified ``.part`` file to its final place."""
-        final = unique_path(dest.target.root / clip_relative_path(camera_id, rec))
+        final = final or self.final_path(camera_id, rec, dest)
         move_file(part, final)
         return final
 
@@ -367,7 +459,7 @@ class StorageManager:
                 self.catalog.remove_copy(clip.id, TARGET_SPOOL)
                 continue
             rel = _relative_or_name(src, self.spool.root, clip.camera)
-            dst = unique_path(self.network.root / rel)
+            dst = reuse_or_unique(self.network.root / rel, src)
             self._ship_files(src, dst)
             self.catalog.remove_copy(clip.id, TARGET_SPOOL)
             self.catalog.add_copy(clip.id, TARGET_NETWORK, str(dst), dst.stat().st_size)
@@ -381,7 +473,7 @@ class StorageManager:
                 continue
             src = Path(local.path)
             rel = _relative_or_name(src, self.local.root, clip.camera)
-            dst = unique_path(self.network.root / rel)
+            dst = reuse_or_unique(self.network.root / rel, src)
             self._ship_files(src, dst, move=False)
             self.catalog.add_copy(clip.id, TARGET_NETWORK, str(dst), dst.stat().st_size)
             shipped += 1
@@ -407,6 +499,39 @@ class StorageManager:
     def queue_network_copy(self, clip_id: int) -> None:
         if self.needs_network_copy():
             self.catalog.add_copy(clip_id, TARGET_NETWORK, "", 0, COPY_PENDING)
+
+    # ---------------------------------------------------------------- cleanup
+
+    def clean_leftovers(self, *, min_age: float = 3600.0) -> int:
+        """Delete partial downloads nothing will resume, and temp copies from crashed runs.
+
+        Only touches ``.partial/*.part`` not referenced by the catalogue and hidden
+        ``.*.tmp`` files older than ``min_age``, on targets that are really there.
+        """
+        keep = self.catalog.referenced_parts()
+        cutoff = time.time() - min_age
+        removed = 0
+        targets = [self.local, self.spool]
+        if self.network is not None and self.network.mount_ok():
+            targets.append(self.network)
+        for target in targets:
+            if not target.root.is_dir():
+                continue
+            candidates = list((target.root / PARTIAL_DIR).glob("*.part"))
+            candidates += [p for p in target.root.rglob(".*.tmp") if p.is_file()]
+            for path in candidates:
+                try:
+                    if path.suffix == ".part" and str(path) in keep:
+                        continue
+                    if path.stat().st_mtime > cutoff:
+                        continue  # may belong to work in progress
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    continue
+        if removed:
+            _LOGGER.info("Removed %d leftover partial or temporary files", removed)
+        return removed
 
     # ------------------------------------------------------------------ health
 

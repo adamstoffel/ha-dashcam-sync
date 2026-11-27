@@ -102,8 +102,11 @@ async def main(demo: bool) -> None:
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, daemon.request_stop)
     await daemon.start()
+    # Credentials are never printed; the panel needs none, the token API (8100) takes
+    # the dev token set in DaemonConfig above.
     print(f"\nFake camera:  http://{host}/\nPanel:        http://127.0.0.1:8099/\n"
-          f"API token:    {daemon.token}\nData:         {DATA}\nCtrl+C to stop.\n", flush=True)  # fmt: skip
+          f"Token API:    http://127.0.0.1:8100/ (dev token: see api_token in scripts/dev.py)\n"
+          f"Data:         {DATA}\nCtrl+C to stop.\n", flush=True)  # fmt: skip
     await daemon.wait()
     await daemon.stop()
     await cam.stop()

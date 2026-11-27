@@ -10,7 +10,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.service import async_extract_referenced_entity_ids
+from homeassistant.helpers.target import TargetSelection, async_extract_referenced_entity_ids
 
 from .api import DashcamSyncApi, DashcamSyncError
 from .const import (
@@ -55,7 +55,7 @@ def parse_clip_id(media_content_id: str) -> int:
 
 async def camera_ids_from_call(hass: HomeAssistant, call: ServiceCall) -> set[str]:
     """Resolve entity and device targets to camera ids."""
-    referenced = async_extract_referenced_entity_ids(hass, call)
+    referenced = async_extract_referenced_entity_ids(hass, TargetSelection(call.data))
     ent_reg = er.async_get(hass)
     dev_reg = dr.async_get(hass)
     device_ids = set(referenced.referenced_devices)

@@ -62,7 +62,7 @@ Honest expectations: hotspot transfers are slow (often under 1 MB/s) and most mi
 | | |
 | --- | --- |
 | <img src="docs/images/overview.png" alt="Overview page"><br>**Overview**: every camera's state, speed and queue, plus storage health and any repair issues. | <img src="docs/images/cameras.png" alt="Cameras page with the setup wizard"><br>**Cameras**: the setup wizard probes the camera, detects its driver and computes the address block. |
-| <img src="docs/images/storage.png" alt="Storage page"><br>**Storage**: local and network targets, retention, and a dry run that lists exactly what the next purge would delete. | <img src="docs/images/logs.png" alt="Logs page"><br>**Logs**: the app's own log, so you can diagnose without leaving Home Assistant. |
+| <img src="docs/images/storage.png" alt="Storage page"><br>**Storage**: where clips are kept and moving them, retention, and a dry run that lists exactly what the next purge would delete. | <img src="docs/images/logs.png" alt="Logs page"><br>**Logs**: the app's own log, so you can diagnose without leaving Home Assistant. |
 
 ## How it fits together
 
@@ -100,7 +100,7 @@ Key design points (all from the build plan):
 | Driver | Detected by | Typical default address | Confidence |
 | --- | --- | --- | --- |
 | `novatek` | `/?custom=1&cmd=3016` heartbeat answers XML | 192.168.1.254 | documented, awaiting hardware |
-| `viidure_app` | JSON from `/app/getproductinfo` | 192.168.169.1 | documented, awaiting hardware |
+| `viidure_app` | JSON from `/app/getproductinfo` | 192.168.169.1, 192.168.0.1 | probed on SGK GK720X hardware |
 | `http_index` | Any HTML directory listing with video links | any | documented, awaiting hardware |
 | `blackvue`, `ait`, `ambarella` | | | planned for 1.1 and 1.2 |
 

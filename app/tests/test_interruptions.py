@@ -1,0 +1,648 @@
+"""Interrupted Wi-Fi and LAN links: a clip is only ever complete when every byte is there.
+
+Each test makes the fake camera fail the way real cameras and networks do, then checks
+two things: no clip is recorded (or placed under its final name) unless it is complete,
+and the next visit finishes the download without fetching bytes twice.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import aiohttp
+import pytest
+import pytest_asyncio
+
+import dashcam_sync.drivers.http as http_mod
+from dashcam_sync.catalog import TARGET_LOCAL, TARGET_NETWORK, Catalog
+from dashcam_sync.drivers.http import parse_content_range
+from dashcam_sync.options import StorageOptions
+from dashcam_sync.storage import StorageManager
+from fakecam import FakeCamera, make_bytes
+from test_engine import Env, make_env
+
+BIG, SMALL = 70_000, 40_000
+BIG_NAME, SMALL_NAME = "20261122_101500_F.MP4", "20261122_101600_F.MP4"
+
+
+@pytest_asyncio.fixture
+async def env(
+    tmp_path: Path, session: aiohttp.ClientSession, novatek_cam: FakeCamera
+) -> AsyncIterator[Env]:
+    novatek_cam.add_novatek(BIG_NAME, BIG, time="2026/11/22 10:15:00")
+    novatek_cam.add_novatek(
+        SMALL_NAME, SMALL, folder="MOVIE\\RO", time="2026/11/22 10:16:00", attr=33
+    )
+    environment = make_env(tmp_path, session, novatek_cam)
+    yield environment
+    await environment.post.stop()
+    environment.catalog.close()
+
+
+def final_files(env: Env) -> list[Path]:
+    root = env.media / "dashcam_sync"
+    return [p for p in root.rglob("*") if p.is_file() and ".partial" not in p.parts]
+
+
+def assert_exact(env: Env) -> None:
+    """Every recorded clip holds exactly the camera's bytes."""
+    for clip in env.catalog.list_clips(camera="car"):
+        copy = env.catalog.copy(clip.id, TARGET_LOCAL)
+        assert copy is not None
+        name = SMALL_NAME if clip.size == SMALL else BIG_NAME
+        assert Path(copy.path).read_bytes() == make_bytes(name, clip.size), copy.path
+
+
+def recorded(env: Env) -> int:
+    return len(env.catalog.list_clips(camera="car"))
+
+
+# ---------------------------------------------------------------- clean early end
+
+
+async def test_a_clean_early_end_keeps_the_partial_file_and_resumes(env: Env) -> None:
+    """The body ends politely mid-file and looks like a normal end.
+
+    That can only happen when the body carries no length (chunked or closed): with a
+    Content-Length a short body is a payload error, covered by the drop tests.
+    """
+    env.cam.faults.eof_after = 30_000
+    env.cam.faults.hide_length = True  # the listing still gives the size
+    first = await env.session()
+    # Both files are cut short once: neither is recorded or placed under a final name.
+    assert recorded(env) == 0 and first.failures == 2
+    assert final_files(env) == []
+    unfinished = env.catalog.unfinished("car")
+    assert sorted(c.offset for c in unfinished) == [30_000, 30_000]
+    for clip in unfinished:
+        assert Path(clip.part_path or "").stat().st_size == 30_000  # kept, not discarded
+
+    env.cam.range_requests.clear()
+    second = await env.session()
+    assert second.result == "ok" and second.clips == 2
+    assert all(r.endswith("=30000-") for _, r in env.cam.range_requests)  # resumed
+    assert first.bytes + second.bytes == BIG + SMALL  # nothing fetched twice
+    assert_exact(env)
+
+
+# ---------------------------------------------------------------------- stall
+
+
+async def test_a_stalled_link_times_out_and_resumes(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Wi-Fi fades: the socket stays open but no bytes arrive."""
+    monkeypatch.setattr(
+        http_mod,
+        "STREAM_TIMEOUT",
+        aiohttp.ClientTimeout(total=None, connect=2, sock_connect=2, sock_read=0.3),
+    )
+    env.cam.faults.stall_after = 25_000  # once per file
+    first = await env.session()
+    assert first.result == "link_lost" and recorded(env) == 0 and final_files(env) == []
+    assert env.cam.recording  # the camera was still put back into recording
+    total = first.bytes
+    for _ in range(3):  # each visit gets further; each file stalls once
+        stats = await env.session()
+        total += stats.bytes
+        if stats.result == "ok":
+            break
+    assert stats.result == "ok" and recorded(env) == 2
+    assert total == BIG + SMALL  # every resume continued; nothing fetched twice
+    assert_exact(env)
+
+
+# ------------------------------------------------------------- dishonest Range
+
+
+async def test_a_partial_answer_from_the_wrong_offset_is_refused(env: Env) -> None:
+    """A buggy server answers 206 but from an earlier byte: splicing that would corrupt."""
+    env.cam.faults.drop_after = 30_000
+    await env.session()
+    env.cam.faults.drop_after = None
+    env.cam.faults.range_wrong_start = 100
+    second = await env.session()
+    assert second.failures >= 1
+    for clip in env.catalog.unfinished("car"):
+        part = Path(clip.part_path or "")
+        # The partial file is untouched: still a clean prefix of the real file.
+        assert (
+            part.read_bytes()
+            == make_bytes(SMALL_NAME if clip.size == SMALL else BIG_NAME, clip.size)[
+                : part.stat().st_size
+            ]
+        )
+    env.cam.faults.range_wrong_start = 0
+    third = await env.session()
+    assert third.result == "ok" and recorded(env) == 2
+    assert_exact(env)
+
+
+async def test_a_partial_answer_from_byte_zero_restarts_the_file(env: Env) -> None:
+    env.cam.faults.drop_after = 30_000
+    await env.session()
+    env.cam.faults.drop_after = None
+    env.cam.faults.range_restart_206 = True
+    second = await env.session()
+    assert second.result == "ok" and second.clips == 2
+    assert_exact(env)
+
+
+# ------------------------------------------------------- no size known anywhere
+
+
+@pytest_asyncio.fixture
+async def sizeless(tmp_path: Path, session: aiohttp.ClientSession) -> AsyncIterator[Env]:
+    """A plain HTTP index camera that gives no sizes: no HEAD length, chunked bodies."""
+    cam = FakeCamera("index")
+    await cam.start()
+    cam.add_index("record", "20261122_101500_F.mp4", BIG)
+    cam.faults.hide_length = True
+    environment = make_env(tmp_path, session, cam)
+    yield environment
+    await environment.post.stop()
+    environment.catalog.close()
+    await cam.stop()
+
+
+async def test_without_any_size_a_cut_download_is_not_taken_as_complete(
+    sizeless: Env,
+) -> None:
+    env = sizeless
+    env.cam.faults.eof_after = 30_000
+    first = await env.session()
+    assert recorded(env) == 0 and final_files(env) == [] and first.failures == 1
+    # The camera was asked for the bytes after the end, and had more.
+    assert ("/record/20261122_101500_F.mp4", "bytes=30000-") in env.cam.range_requests
+
+    second = await env.session()
+    assert second.result == "ok" and second.clips == 1
+    # Completion was confirmed with a 416 past the last byte.
+    assert ("/record/20261122_101500_F.mp4", f"bytes={BIG}-") in env.cam.range_requests
+    [clip] = env.catalog.list_clips(camera="car")
+    copy = env.catalog.copy(clip.id, TARGET_LOCAL)
+    assert copy is not None
+    assert Path(copy.path).read_bytes() == make_bytes("20261122_101500_F.mp4", BIG)
+
+
+async def test_without_sizes_or_range_support_nothing_is_marked_complete(
+    sizeless: Env,
+) -> None:
+    env = sizeless
+    env.cam.faults.ignore_range = True
+    stats = await env.session()
+    assert recorded(env) == 0 and final_files(env) == [] and stats.failures == 1
+    [clip] = env.catalog.list_clips(camera="car", status="failed")
+    assert "cannot be confirmed" in (clip.error or "")
+
+
+# -------------------------------------------------- crash between steps
+
+
+async def test_a_crash_after_placing_a_file_does_not_download_it_again(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real = env.catalog.complete_clip
+    calls = {"n": 0}
+
+    def crash_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise OSError("power cut")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(env.catalog, "complete_clip", crash_once)
+    first = await env.session()
+    assert first.failures == 1 and recorded(env) == 1
+    env.cam.requests_files.clear()  # type: ignore[attr-defined]
+    second = await env.session()
+    assert second.result == "ok" and recorded(env) == 2
+    assert env.cam.requests_files == []  # type: ignore[attr-defined]  # adopted, not refetched
+    assert not [p for p in final_files(env) if "_2." in p.name]
+    assert_exact(env)
+
+
+# -------------------------------------------------------------- unit checks
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("bytes 100-199/200", (100, 200)),
+        ("bytes 0-99/*", (0, None)),
+        ("BYTES 5-9/10", (5, 10)),
+        ("items 0-1/2", None),
+        ("bytes */200", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_content_range_parsing(header: str | None, expected: object) -> None:
+    assert parse_content_range(header) == expected
+
+
+def test_leftover_partials_and_temp_copies_are_cleaned_safely(
+    tmp_path: Path, catalog: Catalog
+) -> None:
+    media = tmp_path / "media"
+    mgr = StorageManager(
+        catalog, StorageOptions(), media_root=media, share_root=tmp_path / "s", min_free_percent=0
+    )
+    partial = mgr.local.partial_dir()
+    from conftest import at
+    from dashcam_sync.models import Kind, Recording
+
+    row, _ = catalog.upsert_recording("car", Recording("/a.MP4", 9, at(9), Kind.NORMAL))
+    kept = partial / f"{row.id}.part"
+    kept.write_bytes(b"resume me")
+    catalog.set_offset(row.id, 9, str(kept))
+    orphan = partial / "999.part"
+    orphan.write_bytes(b"x")
+    old_tmp = media / "dashcam_sync" / "car" / ".clip.mp4.abc.tmp"
+    old_tmp.parent.mkdir(parents=True)
+    old_tmp.write_bytes(b"x")
+    fresh_tmp = old_tmp.with_name(".clip.mp4.def.tmp")
+    fresh_tmp.write_bytes(b"x")
+    hour_ago = time.time() - 7200
+    for path in (kept, orphan, old_tmp):
+        os.utime(path, (hour_ago, hour_ago))
+
+    assert mgr.clean_leftovers() == 2
+    assert kept.exists() and fresh_tmp.exists()
+    assert not orphan.exists() and not old_tmp.exists()
+
+
+def test_shipping_reuses_a_copy_finished_before_a_crash(tmp_path: Path, catalog: Catalog) -> None:
+    from conftest import at
+    from dashcam_sync.models import Kind, Recording
+
+    media, nas = tmp_path / "media", tmp_path / "media" / "nas"
+    nas.mkdir(parents=True)
+    mgr = StorageManager(
+        catalog,
+        StorageOptions(target="both", network_folder="nas"),
+        media_root=media,
+        share_root=tmp_path / "s",
+        min_free_percent=0,
+        mountinfo=f"1 2 0:1 / {nas} rw - cifs //n/s rw\n",
+    )
+    rec = Recording("/a.MP4", 4, at(9), Kind.NORMAL)
+    row, _ = catalog.upsert_recording("car", rec)
+    local = mgr.local.root / "car" / "2026" / "11" / "22" / "normal" / "a.mp4"
+    local.parent.mkdir(parents=True)
+    local.write_bytes(b"data")
+    catalog.complete_clip(row.id, sha256="s", target=TARGET_LOCAL, path=str(local), size=4)
+    catalog.set_post_status(row.id, "done")
+    mgr.queue_network_copy(row.id)
+    already = nas / local.relative_to(mgr.local.root)
+    already.parent.mkdir(parents=True)
+    already.write_bytes(b"data")  # copied, then the app died before recording it
+    assert mgr.ship_pending() == 1
+    assert catalog.copy(row.id, TARGET_NETWORK).path == str(already)  # type: ignore[union-attr]
+    assert not list(nas.rglob("*_2.*"))
+
+
+# ------------------------------------------------- listing sizes that are wrong
+
+
+async def test_sgk_camera_whose_listing_sizes_are_wrong(
+    tmp_path: Path, session: aiohttp.ClientSession
+) -> None:
+    """The real SGK camera lists kilobytes for videos and a wrong size for photos.
+
+    Clips must still download, verified by the download's own headers, and resume
+    from where a dropped link left them instead of starting over.
+    """
+    cam = FakeCamera("viidure")
+    cam.sgk = True
+    await cam.start()
+    env = make_env(tmp_path, session, cam)
+    try:
+        cam.add_viidure("loop", "20261126113926.ts", 300_000, 1_795_000_000)
+        cam.add_viidure("loop", "20261126114016.ts", 250_000, 1_795_000_050)
+        cam.add_viidure("loop", "20261126114106.ts", 90_000, 1_795_000_100)  # being recorded
+        cam.add_viidure("photo", "20261125182315.jpg", 325_210, 1_795_000_200)
+        cam.faults.drop_after = 120_000
+        first = await env.session()
+        assert first.result == "link_lost" and recorded(env) < 3
+        offsets = [c.offset for c in env.catalog.unfinished("car") if c.offset]
+        assert offsets and all(o >= 65_536 for o in offsets)  # kept, not reset to 0
+
+        cam.faults.drop_after = None
+        cam.range_requests.clear()
+        await env.session()
+        clips = env.catalog.list_clips(camera="car")
+        assert len(clips) == 3  # the clip still being recorded waits for next time
+        assert any(r not in ("", "bytes=0-") for _, r in cam.range_requests)  # resumed
+        for clip in clips:
+            copy = env.catalog.copy(clip.id, TARGET_LOCAL)
+            assert copy is not None
+            original = next(f for f in cam.files if len(f.data) == clip.size)
+            assert Path(copy.path).read_bytes() == original.data
+        assert sorted(c.size for c in clips) == [250_000, 300_000, 325_210]  # real sizes
+        again = await env.session()
+        assert again.clips == 0 and again.bytes == 0  # nothing is fetched twice
+    finally:
+        await env.post.stop()
+        env.catalog.close()
+        await cam.stop()
+
+
+def test_progress_uses_the_estimate_then_the_real_size(
+    tmp_path: Path, session: aiohttp.ClientSession
+) -> None:
+    from types import SimpleNamespace
+
+    env = make_env(tmp_path, session, FakeCamera("viidure"))
+    worker = env.worker
+    worker._estimates = {1: 60_215_000}
+    worker._remaining_base = 60_215_000
+    stream = SimpleNamespace(total=60_215_648, start=0, content_length=60_215_648)
+    worker._learn_size(1, stream)  # type: ignore[arg-type]
+    assert worker._remaining_base == 60_215_648 and worker._estimates[1] == 60_215_648
+    worker._learn_size(2, stream)  # type: ignore[arg-type]  # unknown clip: no change
+    assert worker._remaining_base == 60_215_648
+    env.catalog.close()
+
+
+# -------------------------------------------- review findings on sizeless listings
+
+
+async def _sgk_env(tmp_path: Path, session: aiohttp.ClientSession) -> tuple[Env, FakeCamera]:
+    cam = FakeCamera("viidure")
+    cam.sgk = True
+    await cam.start()
+    cam.add_viidure("loop", "20261126113926.ts", 300_000, 1_795_000_000)
+    cam.add_viidure("loop", "20261126114016.ts", 90_000, 1_795_000_050)  # being recorded
+    return make_env(tmp_path, session, cam), cam
+
+
+async def _close(env: Env, cam: FakeCamera) -> None:
+    await env.post.stop()
+    env.catalog.close()
+    await cam.stop()
+
+
+async def test_a_crash_after_placing_a_sizeless_clip_adopts_it(
+    tmp_path: Path, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No listing size: the verified size saved before placing lets the file be adopted."""
+    env, cam = await _sgk_env(tmp_path, session)
+    try:
+        real = env.catalog.complete_clip
+
+        def crash_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+            monkeypatch.setattr(env.catalog, "complete_clip", real)
+            raise OSError("power cut")
+
+        monkeypatch.setattr(env.catalog, "complete_clip", crash_once)
+        await env.session()
+        assert recorded(env) == 0
+        cam.range_requests.clear()
+        downloads = len([r for r in cam.requests if r.endswith(".ts")])
+        await env.session()
+        assert recorded(env) == 1
+        assert len([r for r in cam.requests if r.endswith(".ts")]) == downloads  # adopted
+        assert not [p for p in final_files(env) if "_2." in p.name]
+    finally:
+        await _close(env, cam)
+
+
+async def test_a_complete_part_is_finished_when_the_camera_answers_416(
+    tmp_path: Path, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every byte was saved, then placing failed: the resume gets 416 and must finish."""
+    env, cam = await _sgk_env(tmp_path, session)
+    try:
+        storage = env.storage
+        real_place = storage.place
+
+        def fail_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+            monkeypatch.setattr(storage, "place", real_place)
+            raise OSError("disk hiccup")
+
+        monkeypatch.setattr(storage, "place", fail_once)
+        await env.session()
+        [part] = [c for c in env.catalog.unfinished("car") if c.offset]
+        assert part.offset == 300_000  # the whole clip is in the part file
+        await env.session()
+        [clip] = env.catalog.list_clips(camera="car")
+        assert clip.size == 300_000
+        copy = env.catalog.copy(clip.id, TARGET_LOCAL)
+        assert copy is not None
+        assert Path(copy.path).read_bytes() == cam.files[0].data
+    finally:
+        await _close(env, cam)
+
+
+def test_a_reused_path_without_a_time_in_its_name_is_a_new_recording() -> None:
+    import datetime as dt
+
+    from dashcam_sync.models import Kind, Recording
+
+    cat = Catalog(":memory:")
+    first = Recording("/record/clip.mp4", 0, dt.datetime(2026, 1, 1, tzinfo=dt.UTC), Kind.NORMAL)
+    row, _ = cat.upsert_recording("car", first)
+    cat.complete_clip(row.id, sha256="0" * 64, target="local", path="/m/a.mp4", size=10)
+    later = Recording("/record/clip.mp4", 0, dt.datetime(2026, 1, 2, tzinfo=dt.UTC), Kind.NORMAL)
+    assert cat.is_known_done("car", first)
+    assert not cat.is_known_done("car", later)
+    cat.close()
+
+
+def test_a_same_size_file_with_other_bytes_is_not_reused(tmp_path: Path) -> None:
+    from dashcam_sync.storage import reuse_or_unique
+
+    src, dst = tmp_path / "src.mp4", tmp_path / "dst.mp4"
+    src.write_bytes(b"a" * 100)
+    dst.write_bytes(b"b" * 100)
+    assert reuse_or_unique(dst, src) != dst  # another clip: never overwritten
+    dst.write_bytes(b"a" * 100)
+    assert reuse_or_unique(dst, src) == dst  # a finished copy of this clip: reused
+
+
+async def test_a_416_recovery_drops_bytes_written_after_the_last_checkpoint(
+    tmp_path: Path, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The part holds junk past the saved offset (a crash between write and checkpoint)."""
+    env, cam = await _sgk_env(tmp_path, session)
+    try:
+        storage = env.storage
+        real_place = storage.place
+
+        def fail_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+            monkeypatch.setattr(storage, "place", real_place)
+            raise OSError("disk hiccup")
+
+        monkeypatch.setattr(storage, "place", fail_once)
+        await env.session()
+        [row] = [c for c in env.catalog.unfinished("car") if c.offset]
+        with Path(row.part_path).open("ab") as fh:  # type: ignore[arg-type]
+            fh.write(b"crash tail")
+        await env.session()
+        [clip] = env.catalog.list_clips(camera="car")
+        copy = env.catalog.copy(clip.id, TARGET_LOCAL)
+        assert copy is not None
+        assert Path(copy.path).read_bytes() == cam.files[0].data  # tail dropped
+    finally:
+        await _close(env, cam)
+
+
+async def test_an_end_confirmation_416_stating_another_size_is_refused(
+    tmp_path: Path, session: aiohttp.ClientSession
+) -> None:
+    from dashcam_sync.errors import NothingBeyond, ProtocolError
+
+    env = make_env(tmp_path, session, FakeCamera("viidure"))
+
+    class Driver:
+        async def open(self, rec: object, offset: int) -> object:
+            raise NothingBeyond("past the end", total=50)
+
+    with pytest.raises(ProtocolError, match="50 bytes"):
+        await env.worker._confirm_end(Driver(), None, 100)  # type: ignore[arg-type]
+
+    class Agrees:
+        async def open(self, rec: object, offset: int) -> object:
+            raise NothingBeyond("past the end", total=100)
+
+    await env.worker._confirm_end(Agrees(), None, 100)  # type: ignore[arg-type]
+    env.catalog.close()
+
+
+async def test_a_crash_after_placing_under_a_suffixed_name_adopts_that_file(
+    tmp_path: Path, session: aiohttp.ClientSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The layout name was taken, so the clip went to ``_2``: recovery must find it."""
+    from dashcam_sync.storage import clip_relative_path
+
+    env, cam = await _sgk_env(tmp_path, session)
+    try:
+        listed = [r for r in await _listing(env) if r.path.endswith("113926.ts")]
+        target = env.media / "dashcam_sync" / clip_relative_path("car", listed[0])
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"someone else's file")
+        real = env.catalog.complete_clip
+
+        def crash_once(*args, **kwargs):  # type: ignore[no-untyped-def]
+            monkeypatch.setattr(env.catalog, "complete_clip", real)
+            raise OSError("power cut")
+
+        monkeypatch.setattr(env.catalog, "complete_clip", crash_once)
+        await env.session()
+        downloads = len([r for r in cam.requests if r.endswith(".ts")])
+        await env.session()
+        assert recorded(env) == 1
+        assert len([r for r in cam.requests if r.endswith(".ts")]) == downloads  # adopted
+        [clip] = env.catalog.list_clips(camera="car")
+        copy = env.catalog.copy(clip.id, TARGET_LOCAL)
+        assert copy is not None and "_2." in Path(copy.path).name
+        assert not [p for p in final_files(env) if "_3." in p.name]
+        assert target.read_bytes() == b"someone else's file"  # untouched
+    finally:
+        await _close(env, cam)
+
+
+async def _listing(env: Env) -> list:  # type: ignore[type-arg]
+    from dashcam_sync.drivers import ViidureDriver
+    from dashcam_sync.drivers.http import CameraHttp
+
+    async with aiohttp.ClientSession() as s:
+        drv = ViidureDriver(CameraHttp(s))
+        drv.attach(env.cam.host)
+        return await drv.list_recordings()
+
+
+# ------------------------------------------------- resume is visible; vanished clips
+
+
+async def test_a_resume_is_logged_and_counted(env: Env, caplog: pytest.LogCaptureFixture) -> None:
+    """Someone reading the app log can tell that a clip was resumed, not refetched."""
+    env.cam.faults.drop_after = 30_000
+    with caplog.at_level(logging.INFO, logger="dashcam_sync.engine"):
+        first = await env.session()
+        env.cam.faults.drop_after = None
+        second = await env.session()
+    assert first.result == "link_lost" and first.resumed == 0
+    assert second.result == "ok" and second.resumed == 1
+    text = caplog.text
+    assert "kept 30000 bytes of" in text and "resumes on the next visit" in text
+    assert "resuming" in text and "at byte 30000" in text
+    assert "after a resume" in text
+    assert "session link_lost: 0 clip(s)" in text and "session ok: 2 clip(s)" in text
+    assert "1 resumed" in text
+
+
+async def test_partial_of_a_clip_the_camera_deleted_is_dropped(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A loop-recording camera overwrites old files; their partials must not pile up."""
+    env.cam.faults.drop_after = 30_000
+    await env.session()
+    env.cam.faults.drop_after = None
+    interrupted = [c for c in env.catalog.unfinished("car") if c.offset > 0]
+    assert len(interrupted) == 1
+    part = Path(interrupted[0].part_path or "")
+    assert part.exists()
+
+    gone = interrupted[0].src_path.replace("\\", "/").rsplit("/", 1)[-1]
+    env.cam.files = [f for f in env.cam.files if gone not in f.path]
+    with caplog.at_level(logging.INFO, logger="dashcam_sync.engine"):
+        second = await env.session()
+    assert second.result == "ok" and second.clips == 1  # only the clip still there
+    assert not part.exists()
+    row = env.catalog.get_clip(interrupted[0].id)
+    assert row is not None and row.offset == 0 and row.part_path is None
+    assert "is no longer on the camera; dropped its 30000-byte partial" in caplog.text
+    assert not list((env.media / "dashcam_sync" / ".partial").glob("*.part"))
+
+
+async def test_an_empty_listing_does_not_discard_partials(env: Env) -> None:
+    """No clips at all is more likely a glitch than an empty card: keep what was fetched."""
+    env.cam.faults.drop_after = 30_000
+    await env.session()
+    env.cam.faults.drop_after = None
+    part = Path(next(c for c in env.catalog.unfinished("car") if c.offset > 0).part_path or "")
+    env.cam.files = []
+    await env.session()
+    assert part.exists()
+
+
+async def test_partials_survive_a_listing_with_a_folder_that_failed(
+    tmp_path: Path, session: aiohttp.ClientSession
+) -> None:
+    """Missing from an incomplete listing proves nothing: the resumable bytes stay."""
+    env, cam = await _sgk_env(tmp_path, session)
+    try:
+        cam.faults.drop_after = 120_000
+        await env.session()
+        cam.faults.drop_after = None
+        [row] = [c for c in env.catalog.unfinished("car") if c.offset]
+        part = Path(row.part_path or "")
+        assert part.exists()
+
+        cam.park_status = 500  # the parking folder fails: the listing is incomplete
+        hidden = cam.files[0]
+        cam.files = [f for f in cam.files if f is not hidden]
+        # The camera moved on: a newer clip is being recorded, so the listing is not empty.
+        cam.add_viidure("loop", "20261126114106.ts", 80_000, 1_795_000_100)
+        await env.session()
+        assert part.exists()  # kept: it may be in the folder that failed
+
+        cam.park_status = 404  # no such folder: the listing is complete again
+        await env.session()
+        assert not part.exists()  # really gone from the card: dropped
+    finally:
+        await _close(env, cam)
+
+
+def test_drivers_report_whether_their_listing_is_complete() -> None:
+    from dashcam_sync.drivers import DRIVERS
+    from dashcam_sync.drivers.http import CameraHttp
+
+    for cls in DRIVERS:
+        assert cls(CameraHttp(None)).listing_complete is True  # type: ignore[arg-type]

@@ -5,7 +5,7 @@ Confidence levels: **documented** means the driver follows published community p
 | Driver | Detected by | Typical default address | Listing and download | Confidence | Release |
 | --- | --- | --- | --- | --- | --- |
 | `novatek` | `/?custom=1&cmd=3016` heartbeat answers XML | 192.168.1.254 | `cmd=3015` after `cmd=3001&par=2` (playback mode); files over plain HTTP | documented | 1.0 |
-| `viidure_app` | JSON from `/app/getproductinfo` | 192.168.169.1 | `/app/getfilelist?folder=loop&start=0&end=99`, then HTTP download of the returned `.ts` paths | documented | 1.0 |
+| `viidure_app` | JSON from `/app/getproductinfo` | 192.168.169.1, 192.168.0.1 | `/app/getfilelist?folder=loop&start=0&end=99`, then HTTP download of the returned `.ts` paths. SGK GK720X firmware (probed): files under `/EMMC/Normal/F`, no playback mode (the clip being recorded waits for the next visit), card space in MiB, live stream from `/app/getmediainfo` | probed | 1.0 |
 | `http_index` | Any HTML directory listing with video links | any | Crawl at most 40 folders, download by URL | documented | 1.0 |
 | `blackvue` | `/Config/version.bin` | 10.99.77.1 | Vendor list endpoint + HTTP | planned | 1.1 |
 | `ait` | `/cgi-bin/Config.cgi` | 192.72.1.1 | `Config.cgi` file list | planned | 1.1 |

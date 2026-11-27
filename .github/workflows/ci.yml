@@ -138,6 +138,19 @@ jobs:
           cp integration/hacs.json ./hacs.json
       - uses: home-assistant/actions/hassfest@master
 
+  ha-api:
+    # The tests run on the newest Home Assistant test package CI can install, which can be
+    # older than the minimum in hacs.json. A helper removed in between passes every test and
+    # then stops the integration loading on a real install.
+    name: Integration imports exist in the minimum Home Assistant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python scripts/check_ha_api.py
+
   release-metadata:
     name: Versions agree, scripts work
     runs-on: ubuntu-latest

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as dt
+
 import aiohttp
 import pytest
 import pytest_asyncio
@@ -160,7 +162,10 @@ async def test_novatek_heartbeat_runs_during_download(
     stream = await drv.open(rec, 0)
     import asyncio
 
-    await asyncio.sleep(0.1)
+    for _ in range(500):  # wait for the beats rather than assume how fast a busy machine is
+        if novatek_cam.heartbeats >= 2:
+            break
+        await asyncio.sleep(0.01)
     assert novatek_cam.heartbeats >= 2
     await read_all(stream)
     await drv.close()
@@ -180,7 +185,7 @@ async def test_viidure_driver(session: aiohttp.ClientSession) -> None:
         probe = await drv.probe(cam.host)
         assert probe is not None and probe.model == "V-100"
         info = await drv.info()
-        assert info.firmware == "1.0.9" and info.free_bytes == 5_000_000
+        assert info.firmware == "1.0.9" and info.free_bytes == 4768 * 1024 * 1024
         await drv.prepare()
         assert cam.mode == "playback"
         recs = await drv.list_recordings()
@@ -193,6 +198,80 @@ async def test_viidure_driver(session: aiohttp.ClientSession) -> None:
         assert drv.live_url() == "rtsp://127.0.0.1:554/live"
     finally:
         await cam.stop()
+
+
+async def test_viidure_sgk_firmware(session: aiohttp.ClientSession) -> None:
+    """SGK GK720X (seen in a real probe): no playback mode, only loop and photo
+    folders, a bare name next to the full path, firmware in getdeviceattr, MiB."""
+    cam = FakeCamera("viidure")
+    cam.sgk = True
+    await cam.start()
+    try:
+        cam.add_viidure("loop", "20261126105248.ts", 6000, 1_795_000_000)
+        cam.add_viidure("loop", "20261126105338.ts", 900, 1_795_000_050)  # being recorded
+        cam.add_viidure("photo", "20261126105300.jpg", 100, 1_795_000_100)
+        drv = ViidureDriver(CameraHttp(session))
+        probe = await drv.probe(cam.host)
+        assert probe is not None and probe.model == "DVR" and probe.firmware == "V7_X83_260126"
+        assert drv.live_url() == "rtsp://127.0.0.1:554/live/tcp/ch1"
+        info = await drv.info()
+        assert info.firmware == "V7_X83_260126"
+        assert info.free_bytes == 109450 * 1024 * 1024
+        await drv.prepare()  # 404: nothing to switch, not an error
+        recs = await drv.list_recordings()
+        # No playback mode, so the clip still being written is left for next time.
+        assert sorted(r.path.rsplit("/", 1)[-1] for r in recs) == [
+            "20261126105248.ts",
+            "20261126105300.jpg",
+        ]
+        # The photo, also answered for "emr", is listed once and stays a photo.
+        assert [r.kind for r in recs if r.path.endswith(".jpg")] == [Kind.PHOTO]
+        rec = next(r for r in recs if r.kind is Kind.NORMAL)
+        assert rec.path == "/EMMC/Normal/F/20261126105248.ts"
+        # The file name's wall-clock time wins over the camera's wrong epoch.
+        from dashcam_sync.models import naive_local_to_utc
+
+        assert rec.start == naive_local_to_utc(dt.datetime(2026, 11, 26, 10, 52, 48))
+        assert drv.url_path(rec) == "/EMMC/Normal/F/20261126105248.ts"
+        assert await read_all(await drv.open(rec, 0)) == make_bytes("20261126105248.ts", 6000)
+        await drv.restore()
+    finally:
+        await cam.stop()
+
+
+async def test_viidure_missing_loop_folder_is_still_an_error(
+    session: aiohttp.ClientSession,
+) -> None:
+    from dashcam_sync.errors import ProtocolError
+
+    cam = FakeCamera("viidure")
+    cam.sgk = True
+    await cam.start()
+    try:
+        drv = ViidureDriver(CameraHttp(session))
+        drv.attach(cam.host)
+        original = cam._sgk
+
+        def no_loop(request):  # type: ignore[no-untyped-def]
+            if request.query.get("folder") == "loop":
+                from aiohttp import web
+
+                return web.Response(status=500)
+            return original(request)
+
+        cam._sgk = no_loop  # type: ignore[method-assign]
+        with pytest.raises(ProtocolError):
+            await drv.list_recordings()
+    finally:
+        await cam.stop()
+
+
+def test_viidure_sd_space_units() -> None:
+    from dashcam_sync.drivers.viidure import _sd_free_bytes
+
+    assert _sd_free_bytes({"free": 109450, "total": 119217}) == 109450 * 1024 * 1024
+    assert _sd_free_bytes({"free": 9_000_000, "total": 64_000_000_000}) == 9_000_000
+    assert _sd_free_bytes({}) is None and _sd_free_bytes({"free": "x"}) is None
 
 
 async def test_viidure_pagination(session: aiohttp.ClientSession) -> None:
@@ -271,7 +350,7 @@ async def test_fingerprint_and_hosts() -> None:
     assert candidate_hosts("10.1.1.1") == ["10.1.1.1"]
     hosts = candidate_hosts(None, "192.168.1.1")
     assert hosts[0] == "192.168.1.1" and "192.168.1.254" in hosts and "192.168.169.1" in hosts
-    assert candidate_hosts(None, None, ["viidure_app"]) == ["192.168.169.1"]
+    assert candidate_hosts(None, None, ["viidure_app"]) == ["192.168.169.1", "192.168.0.1"]
     assert await fingerprint("127.0.0.1:1") == {1: False}
     assert [c.name for c in DRIVERS] == ["novatek", "viidure_app", "http_index"]
 

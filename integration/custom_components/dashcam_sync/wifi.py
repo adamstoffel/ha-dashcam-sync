@@ -42,6 +42,8 @@ class WifiProfile:
     address: str
     prefix: int
     block: str
+    # Point-to-point only: the camera, so NetworkManager adds a direct route to it.
+    gateway: str | None = None
 
     def as_placeholders(self) -> dict[str, str]:
         return {
@@ -50,6 +52,7 @@ class WifiProfile:
             "address": self.address,
             "prefix": str(self.prefix),
             "block": self.block,
+            "gateway": self.gateway or "empty",
         }
 
 
@@ -63,6 +66,7 @@ def profile_from_api(wifi: dict[str, Any]) -> WifiProfile:
         address=str(iface.ip),
         prefix=iface.network.prefixlen,
         block=str(iface.network),
+        gateway=str(ipaddress.IPv4Address(wifi["gateway"])) if wifi.get("gateway") else None,
     )
 
 
@@ -98,12 +102,34 @@ async def async_list_wifi_interfaces(hass: HomeAssistant) -> list[WifiInterface]
     return out
 
 
+async def async_scan_access_points(hass: HomeAssistant, interface: str) -> list[dict[str, Any]]:
+    """Networks the interface can see, as Search networks under Settings > System > Network does."""
+    client = _client(hass)
+    try:
+        found = await client.network.access_points(interface)
+    except Exception as err:
+        raise WifiUnavailable(f"scan failed: {err}") from err
+    out: list[dict[str, Any]] = []
+    for ap in found:
+        mode = getattr(ap, "mode", None)
+        out.append(
+            {
+                "ssid": getattr(ap, "ssid", None),
+                "signal": getattr(ap, "signal", None),
+                "mode": str(getattr(mode, "value", mode) or ""),
+            }
+        )
+    return out
+
+
 async def async_apply_profile(hass: HomeAssistant, profile: WifiProfile) -> None:
-    """Join the camera hotspot with the small-block static address.
+    """Join the camera hotspot with the address the app picked.
 
     Infrastructure mode, the camera's SSID with a WPA passphrase, a static IPv4
-    address with no gateway and no DNS servers (so the default route and name
-    resolution stay on Ethernet), and IPv6 disabled.
+    address with no DNS servers, and IPv6 disabled. A small block has no
+    gateway. Point-to-point (a /32) names the camera as gateway: that is how
+    NetworkManager gets a direct route to it; the route it adds ranks below the
+    wired one, and the app disconnects the camera if the primary route ever moves.
     """
     client = _client(hass)
     try:
@@ -129,15 +155,35 @@ async def async_apply_profile(hass: HomeAssistant, profile: WifiProfile) -> None
         ipv4=IPv4Config(
             method=InterfaceMethod.STATIC,
             address=[ipaddress.IPv4Interface(f"{profile.address}/{profile.prefix}")],
-            gateway=None,
+            gateway=ipaddress.IPv4Address(profile.gateway) if profile.gateway else None,
             nameservers=[],
         ),
         ipv6=IPv6Config(method=InterfaceMethod.DISABLED),
     )
     try:
-        await client.network.update_interface(profile.interface, config)
+        await _post_interface_update(client, profile.interface, config)
     except Exception as err:
         raise WifiUnavailable(f"the Supervisor refused the Wi-Fi profile: {err}") from err
+
+
+async def _post_interface_update(client: Any, interface: str, config: Any) -> None:
+    """``network.update_interface`` with the Wi-Fi key the Supervisor actually accepts.
+
+    aiohasupervisor (0.3 to at least 0.11) serialises the Wi-Fi security as
+    ``method``, but the Supervisor's schema calls it ``auth`` and rejects the whole
+    request ("extra keys not allowed @ data['wifi']['method']"), so a protected
+    hotspot could never be joined. Send the same payload with the key renamed;
+    when the client's internals are not there, fall back to the library call.
+    """
+    payload = config.to_dict()
+    wifi = payload.get("wifi")
+    if isinstance(wifi, dict) and "method" in wifi:
+        wifi["auth"] = wifi.pop("method")
+    raw = getattr(client.network, "_client", None)
+    if raw is None or not hasattr(raw, "post"):
+        await client.network.update_interface(interface, config)
+        return
+    await raw.post(f"network/interface/{interface}/update", json=payload)
 
 
 async def async_disconnect(hass: HomeAssistant, interface: str) -> None:
@@ -196,3 +242,34 @@ def known_device_ips(hass: HomeAssistant) -> list[str]:
             continue
         consider(entry.data.get("host"))
     return sorted(found)
+
+
+async def async_join_camera(
+    hass: HomeAssistant, api: Any, camera_id: str
+) -> tuple[str, str | None]:
+    """Join a hotspot camera's Wi-Fi when the panel asks; returns ``(state, reason)``.
+
+    The same checks as the options flow: the address block must be free, the adapter must
+    exist, and anything the Supervisor client cannot do falls back to manual setup.
+    """
+    from .api import DashcamSyncError  # local import keeps this module free of the client
+
+    try:
+        # The check first: it may pick a new address, which the profile then carries.
+        report = await api.async_overlap(camera_id, known_device_ips(hass))
+        profile = profile_from_api(await api.async_wifi(camera_id))
+    except (DashcamSyncError, KeyError, ValueError) as err:
+        return "failed", f"app_unavailable: {err}"
+    if report.get("blocked"):
+        return "failed", str(report.get("result") or "address_in_use")
+    try:
+        adapters = await async_list_wifi_interfaces(hass)
+    except WifiUnavailable as err:
+        return "manual", str(err)
+    if profile.interface not in {a.name for a in adapters}:
+        return "failed", f"no_adapter: {profile.interface}"
+    try:
+        await async_apply_profile(hass, profile)
+    except WifiUnavailable as err:
+        return "manual", str(err)
+    return "joined", None

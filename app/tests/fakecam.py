@@ -40,6 +40,13 @@ class Faults:
     list_error: bool = False
     chunk_delay: float = 0.0
     drops_done: set[str] = field(default_factory=set)
+    # Interruptions that look different on the wire:
+    eof_after: int | None = None  # end the body cleanly after N bytes, once per file
+    stall_after: int | None = None  # stop sending after N bytes, keep the socket open, once
+    hide_length: bool = False  # no Content-Length (chunked) and "/*" as the range total
+    range_restart_206: bool = False  # answer a Range with 206 from byte 0 (honestly labelled)
+    range_wrong_start: int = 0  # answer a Range from this many bytes earlier (labelled so)
+    cuts_done: set[str] = field(default_factory=set)
 
 
 class FakeCamera:
@@ -59,6 +66,9 @@ class FakeCamera:
         self.restore_calls = 0
         self.fail_restore = False
         self.range_requests: list[tuple[str, str]] = []
+        # Viidure only: behave like SGK GK720X firmware (dashcam_probe report, Nov 2026).
+        self.sgk = False
+        self.park_status = 404  # SGK: no parking folder; 500 = a folder that failed
 
     # ------------------------------------------------------------- populate
 
@@ -79,8 +89,12 @@ class FakeCamera:
         return f
 
     def add_viidure(self, folder: str, name: str, size: int, time: int) -> FakeFile:
-        path = f"/mnt/mmc/DCIM/{folder}/{name}"
-        url = f"/DCIM/{folder}/{name}"
+        if self.sgk:
+            sub = {"loop": "Normal", "photo": "Photo"}[folder]
+            path = url = f"/EMMC/{sub}/F/{name}"
+        else:
+            path = f"/mnt/mmc/DCIM/{folder}/{name}"
+            url = f"/DCIM/{folder}/{name}"
         f = FakeFile(path, url, make_bytes(name, size), 0, str(time))
         f.folder = folder  # type: ignore[attr-defined]
         self.files.append(f)
@@ -140,8 +154,10 @@ class FakeCamera:
 
     async def _serve_file(self, request: web.Request, f: FakeFile) -> web.StreamResponse:
         data = f.data
+        faults = self.faults
         if request.method == "HEAD":
-            return web.Response(headers={"Content-Length": str(len(data))})
+            headers = {} if faults.hide_length else {"Content-Length": str(len(data))}
+            return web.Response(headers=headers)
         start = 0
         status = 200
         rng = request.headers.get("Range")
@@ -149,30 +165,51 @@ class FakeCamera:
         self.requests_files.append(f.url)
         if rng:
             self.range_requests.append((f.url, rng))
-        if rng and not self.faults.ignore_range:
+        if rng and not faults.ignore_range:
             start = int(rng.split("=")[1].split("-")[0])
+            if start >= len(data):
+                return web.Response(status=416, headers={"Content-Range": f"bytes */{len(data)}"})
+            if faults.range_restart_206:
+                start = 0
+            elif faults.range_wrong_start:
+                start = max(0, start - faults.range_wrong_start)
             status = 206
         body = data[start:]
         declared = len(body)
-        if self.faults.wrong_length:
+        if faults.wrong_length:
             body = body[: max(0, len(body) - 10)]
         resp = web.StreamResponse(status=status)
-        resp.content_length = declared
+        if not faults.hide_length:
+            resp.content_length = declared
         if status == 206:
-            resp.headers["Content-Range"] = f"bytes {start}-{len(data) - 1}/{len(data)}"
+            total = "*" if faults.hide_length else str(len(data))
+            resp.headers["Content-Range"] = f"bytes {start}-{len(data) - 1}/{total}"
         await resp.prepare(request)
-        limit = self.faults.drop_after
-        if limit is not None and f.url not in self.faults.drops_done and len(body) > limit:
-            self.faults.drops_done.add(f.url)
+        limit = faults.drop_after
+        if limit is not None and f.url not in faults.drops_done and len(body) > limit:
+            faults.drops_done.add(f.url)
             await resp.write(body[:limit])
             assert request.transport is not None
             request.transport.abort()
             return resp
+        for cut, mode in ((faults.eof_after, "eof"), (faults.stall_after, "stall")):
+            if cut is not None and f.url not in faults.cuts_done and len(body) > cut:
+                faults.cuts_done.add(f.url)
+                await resp.write(body[:cut])
+                if mode == "stall":
+                    # Send nothing more until the client gives up (its read timeout).
+                    transport = request.transport
+                    for _ in range(600):
+                        if transport is None or transport.is_closing():
+                            return resp
+                        await asyncio.sleep(0.05)
+                await resp.write_eof()
+                return resp
         chunk = 16 * 1024
         for i in range(0, len(body), chunk):
             await resp.write(body[i : i + chunk])
-            await asyncio.sleep(self.faults.chunk_delay)
-        if self.faults.wrong_length:
+            await asyncio.sleep(faults.chunk_delay)
+        if faults.wrong_length:
             assert request.transport is not None
             request.transport.abort()
         else:
@@ -236,12 +273,16 @@ class FakeCamera:
     # -------------------------------------------------------------- viidure
 
     async def _viidure(self, request: web.Request) -> web.StreamResponse:
+        if self.sgk:
+            sgk = self._sgk(request)
+            if sgk is not None:
+                return sgk
         if request.path == "/app/getproductinfo":
             return web.json_response(
                 {"result": 0, "info": {"model": "V-100", "softver": "1.0.9", "company": "viidure"}}
             )
-        if request.path == "/app/getsdinfo":
-            return web.json_response({"result": 0, "info": {"free": 5_000_000}})
+        if request.path == "/app/getsdinfo":  # MiB, like the real cameras
+            return web.json_response({"result": 0, "info": {"free": 4768, "total": 30436}})
         if request.path == "/app/playback":
             self.mode = "playback" if request.query.get("param") == "enter" else "movie"
             if self.mode == "movie":
@@ -274,6 +315,50 @@ class FakeCamera:
                 }
             )
         return web.Response(status=404)
+
+    def _sgk(self, request: web.Request) -> web.StreamResponse | None:
+        """What differs on SGK firmware; ``None`` falls through to the common answers."""
+        path, folder = request.path, request.query.get("folder", "")
+        if path == "/app/getproductinfo":
+            return web.json_response(
+                {"result": 0, "info": {"model": "DVR", "company": "SGK", "soc": "GK720X"}}
+            )
+        if path == "/app/getdeviceattr":
+            return web.json_response(
+                {"result": 0, "info": {"softver": "V7_X83_260126", "ssid": "P2DC", "camnum": 1}}
+            )
+        if path == "/app/getmediainfo":
+            return web.json_response(
+                {"result": 0, "info": {"rtsp": "rtsp://192.168.0.1/live/tcp/ch1", "port": "6035"}}
+            )
+        if path == "/app/getsdinfo":
+            return web.json_response(
+                {"result": 0, "info": {"status": 0, "free": 109450, "total": 119217}}
+            )
+        if path in ("/app/playback", "/app/setparamvalue", "/app/getrecduration"):
+            return web.Response(status=404)
+        if path == "/app/getfilelist" and folder == "event":
+            return web.json_response({"result": -1})
+        if path == "/app/getfilelist" and folder == "emr":
+            folder = "photo"  # the real camera answers a folder it lacks with the photos
+        if path == "/app/getfilelist" and folder == "park":
+            return web.Response(status=self.park_status)
+        if path == "/app/getfilelist":
+            start = int(request.query.get("start", "0"))
+            end = int(request.query.get("end", "99"))
+            files = [f for f in self.files if getattr(f, "folder", "") == folder][start : end + 1]
+            listing = [
+                {
+                    "name": f.url.rsplit("/", 1)[-1],
+                    "path": f.path,
+                    # Like the real camera: kB for videos, an unrelated number for photos.
+                    "size": 73400 if f.path.endswith(".jpg") else len(f.data) // 1000,
+                    "createtime": int(f.time),
+                }
+                for f in files
+            ]
+            return web.json_response({"result": 0, "info": [{"folder": folder, "files": listing}]})
+        return None
 
     # ---------------------------------------------------------------- index
 

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .drivers.base import timestamp_from_name
 from .models import Channel, Kind, Recording, utc
 
 SCHEMA = """
@@ -196,13 +197,36 @@ class Catalog:
 
     # ------------------------------------------------------------------ clips
 
+    @staticmethod
+    def _identity(camera: str, rec: Recording) -> tuple[str, tuple[object, ...]]:
+        """How a listed recording is matched to its row.
+
+        Path, size and start time. When the listing gives no trustworthy size (0) and
+        the file name carries the recording time (it then names one recording only),
+        the path alone, preferring a finished row: a corrected start time must not make
+        a clip look new. A sizeless path without a time in its name (a camera that
+        reuses ``clip.mp4``) keeps the start time, so a new recording is new.
+        """
+        if rec.size:
+            return (
+                "camera=? AND src_path=? AND size=? AND start_ts=?",
+                (camera, rec.path, rec.size, rec.start.timestamp()),
+            )
+        if timestamp_from_name(rec.path) is None:
+            return (
+                "camera=? AND src_path=? AND start_ts=? ORDER BY id DESC LIMIT 1",
+                (camera, rec.path, rec.start.timestamp()),
+            )
+        return (
+            "camera=? AND src_path=? ORDER BY status IN ('done', 'deleted') DESC, id DESC LIMIT 1",
+            (camera, rec.path),
+        )
+
     def upsert_recording(self, camera: str, rec: Recording) -> tuple[ClipRow, bool]:
         """Insert a listed recording; returns the row and whether it was new."""
+        where, args = self._identity(camera, rec)
         with self._tx() as conn:
-            row = conn.execute(
-                "SELECT * FROM clips WHERE camera=? AND src_path=? AND size=? AND start_ts=?",
-                (camera, rec.path, rec.size, rec.start.timestamp()),
-            ).fetchone()
+            row = conn.execute(f"SELECT * FROM clips WHERE {where}", args).fetchone()
             if row is not None:
                 return _clip(row), False
             cur = conn.execute(
@@ -229,12 +253,35 @@ class Catalog:
         Deleting a clip keeps its row so the camera's copy, still on the card, is
         never fetched again.
         """
+        where, args = self._identity(camera, rec)
         with self._lock:
-            row = self._conn.execute(
-                "SELECT status FROM clips WHERE camera=? AND src_path=? AND size=? AND start_ts=?",
-                (camera, rec.path, rec.size, rec.start.timestamp()),
-            ).fetchone()
+            row = self._conn.execute(f"SELECT status FROM clips WHERE {where}", args).fetchone()
         return row is not None and row["status"] in ("done", "deleted")
+
+    def set_verified_size(self, clip_id: int, size: int) -> None:
+        """The size the download proved, saved before the file is placed."""
+        with self._lock:
+            self._conn.execute("UPDATE clips SET size=? WHERE id=?", (size, clip_id))
+
+    def refresh_listing(self, camera: str, rec: Recording) -> None:
+        """Correct an already downloaded clip's type and start time when the driver
+        now reads them better (only for listings matched by path)."""
+        where, args = self._identity(camera, rec)
+        with self._tx() as conn:
+            row = conn.execute(
+                f"SELECT id, kind, start_ts FROM clips WHERE {where}", args
+            ).fetchone()
+            if row is None:
+                return
+            if row["kind"] != rec.kind.value:
+                conn.execute(
+                    "UPDATE clips SET kind=?, locked=? WHERE id=?",
+                    (rec.kind.value, int(rec.locked), row["id"]),
+                )
+            if not rec.size and abs(row["start_ts"] - rec.start.timestamp()) >= 1:
+                conn.execute(
+                    "UPDATE clips SET start_ts=? WHERE id=?", (rec.start.timestamp(), row["id"])
+                )
 
     def get_clip(self, clip_id: int) -> ClipRow | None:
         with self._lock:
@@ -279,10 +326,13 @@ class Catalog:
         now = time.time()
         with self._tx() as conn:
             conn.execute(
-                "UPDATE clips SET status='done', sha256=?, offset=size, part_path=NULL,"
-                " done_ts=?, error=NULL WHERE id=?",
-                (sha256, now, clip_id),
+                # The verified size: equal to the listed one when that is trustworthy,
+                # and the real size for firmware that lists something else.
+                "UPDATE clips SET size=?, status='done',"
+                " sha256=?, part_path=NULL, done_ts=?, error=NULL WHERE id=?",
+                (size, sha256, now, clip_id),
             )
+            conn.execute("UPDATE clips SET offset=size WHERE id=?", (clip_id,))
             conn.execute(
                 "INSERT OR REPLACE INTO copies (clip_id, target, path, size, state, created_ts)"
                 " VALUES (?,?,?,?,?,?)",
@@ -379,6 +429,11 @@ class Catalog:
             ).fetchall()
         return [_clip(r) for r in rows]
 
+    def unfinished_not_listed(self, camera: str, recs: list[Recording]) -> list[ClipRow]:
+        """Unfinished clips whose source path is absent from a full camera listing."""
+        listed = {r.path for r in recs}
+        return [c for c in self.unfinished(camera) if c.src_path not in listed]
+
     # ----------------------------------------------------------------- copies
 
     def add_copy(
@@ -394,6 +449,21 @@ class Catalog:
     def remove_copy(self, clip_id: int, target: str) -> None:
         with self._lock:
             self._conn.execute("DELETE FROM copies WHERE clip_id=? AND target=?", (clip_id, target))
+
+    def referenced_parts(self) -> set[str]:
+        """Partial files that an unfinished clip will resume from."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT part_path FROM clips WHERE part_path IS NOT NULL AND status != 'done'"
+            ).fetchall()
+        return {r["part_path"] for r in rows}
+
+    def path_in_use(self, path: str) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM copies WHERE path=? LIMIT 1", (path,)
+            ).fetchone()
+        return row is not None
 
     def copies(self, clip_id: int) -> list[CopyRow]:
         with self._lock:
@@ -508,3 +578,7 @@ class Catalog:
             self._conn.execute(
                 "INSERT OR REPLACE INTO kv (key, value) VALUES (?,?)", (key, json.dumps(value))
             )
+
+    def kv_delete(self, key: str) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM kv WHERE key=?", (key,))

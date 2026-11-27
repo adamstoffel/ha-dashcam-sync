@@ -18,7 +18,7 @@ from dashcam_sync.options import StorageOptions
 from dashcam_sync.storage import (
     StorageManager,
     clip_relative_path,
-    is_network_mount,
+    is_storage_mount,
     mount_fstype,
     move_file,
     remove_clip_files,
@@ -30,15 +30,28 @@ MOUNTINFO = (
     "40 36 0:41 / /media/nas\\040box rw,relatime - cifs //nas/share rw\n"
     "41 36 0:42 / /media/nfsshare rw - nfs4 nas:/vol rw\n"
     "42 36 0:43 / /media/tmp rw - tmpfs tmpfs rw\n"
+    "43 36 179:1 / /media/sdcard rw - exfat /dev/mmcblk0p1 rw\n"
+    "44 36 8:17 / /share/usb_disk rw - ext4 /dev/sdb1 rw\n"
+    "45 36 8:33 / /media/old_drive rw - fuseblk /dev/sdc1 rw\n"
 )
 
 
 def test_mount_detection() -> None:
     assert mount_fstype("/media/nas box", MOUNTINFO) == "cifs"
-    assert is_network_mount("/media/nfsshare/", MOUNTINFO)
-    assert not is_network_mount("/media/tmp", MOUNTINFO)
-    assert not is_network_mount("/media/missing", MOUNTINFO)
+    assert is_storage_mount("/media/nfsshare/", MOUNTINFO)
+    assert not is_storage_mount("/media/tmp", MOUNTINFO)
+    assert not is_storage_mount("/media/missing", MOUNTINFO)
     assert mount_fstype("/media", "garbage line") is None
+
+
+def test_local_disks_added_in_home_assistant_count_as_storage() -> None:
+    assert is_storage_mount("/media/sdcard", MOUNTINFO)  # SD card, exFAT
+    assert is_storage_mount("/share/usb_disk", MOUNTINFO)  # USB disk, ext4
+    assert is_storage_mount("/media/old_drive", MOUNTINFO)  # NTFS through ntfs-3g
+    # The data disk is ext4 too, but a missing disk's folder is not a mount point of its
+    # own: it must never be taken for the disk.
+    assert not is_storage_mount("/media/unplugged_sdcard", MOUNTINFO)
+    assert not is_storage_mount("/media/sdcard/dashcam", MOUNTINFO)
 
 
 def test_clip_relative_path_never_uses_camera_names() -> None:

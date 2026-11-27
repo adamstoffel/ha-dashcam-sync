@@ -15,7 +15,7 @@ from typing import Any
 import aiohttp
 from defusedxml import ElementTree as SafeET
 
-from ..errors import LinkLost, ProtocolError
+from ..errors import LinkLost, NothingBeyond, ProtocolError
 
 MAX_BODY = 4 * 1024 * 1024
 CHUNK = 64 * 1024
@@ -25,13 +25,27 @@ STREAM_TIMEOUT = aiohttp.ClientTimeout(total=None, connect=4, sock_connect=4, so
 NETWORK_ERRORS = (aiohttp.ClientError, TimeoutError, OSError)
 
 
+def parse_content_range(value: str | None) -> tuple[int, int | None] | None:
+    """``bytes START-END/TOTAL`` as ``(START, TOTAL)``; TOTAL is ``None`` for ``*``."""
+    if not value:
+        return None
+    unit, _, rest = value.strip().partition(" ")
+    span, _, total = rest.partition("/")
+    first, _, _ = span.partition("-")
+    if unit.lower() != "bytes" or not first.strip().isdigit():
+        return None
+    total = total.strip()
+    return int(first), int(total) if total.isdigit() else None
+
+
 class ByteStream:
     """Async iterator over a download that remembers what was really served.
 
     ``start`` is the offset the first byte belongs to: it equals the requested
     offset when the camera honoured the Range header and ``0`` when it ignored
     it (answered 200 instead of 206), in which case the engine restarts the
-    file.
+    file. ``total`` is the full file size when the camera stated it (the
+    ``Content-Range`` total, or ``Content-Length`` of a whole-file answer).
     """
 
     def __init__(
@@ -41,6 +55,7 @@ class ByteStream:
         start: int,
         content_length: int | None,
         range_honored: bool,
+        total: int | None = None,
         on_close: Callable[[], None] | None = None,
     ) -> None:
         self._on_close = on_close
@@ -49,6 +64,7 @@ class ByteStream:
         self.start = start
         self.content_length = content_length
         self.range_honored = range_honored
+        self.total = total
         self._closed = False
 
     def __aiter__(self) -> ByteStream:
@@ -155,17 +171,37 @@ class CameraHttp:
                 )
             except NETWORK_ERRORS as err:
                 raise LinkLost(f"{path}: {err}") from err
+            if resp.status == 416 and offset > 0:
+                stated = _unsatisfied_total(resp.headers.get("Content-Range"))
+                resp.release()
+                raise NothingBeyond(f"{path}: nothing at or after byte {offset}", stated)
             if resp.status not in (200, 206):
                 resp.release()
                 raise ProtocolError(f"{path}: HTTP {resp.status}")
-            honored = resp.status == 206
-            start = offset if honored else 0
             length = resp.content_length
+            total: int | None = None
+            if resp.status == 206:
+                served = parse_content_range(resp.headers.get("Content-Range"))
+                if served is None:
+                    # 206 without a usable Content-Range: the bytes cannot be placed safely.
+                    resp.release()
+                    raise ProtocolError(f"{path}: partial answer without a Content-Range")
+                start, total = served
+                if start not in (offset, 0):
+                    resp.release()
+                    raise ProtocolError(
+                        f"{path}: asked for byte {offset}, the camera answered from {start}"
+                    )
+                honored = start == offset
+            else:
+                honored, start = False, 0
+                total = length
             return ByteStream(
                 resp,
                 start=start,
                 content_length=length,
                 range_honored=honored,
+                total=total,
                 on_close=self._release,
             )
         except BaseException:
@@ -189,3 +225,17 @@ async def tcp_open(host: str, port: int, timeout: float = 1.5) -> bool:
     except OSError:
         pass
     return True
+
+
+def _unsatisfied_total(value: str | None) -> int | None:
+    """The size in a 416's ``Content-Range: bytes */N``, if it states one."""
+    if not value:
+        return None
+    unit, _, rest = value.strip().partition(" ")
+    if unit.lower() != "bytes" or not rest.startswith("*/"):
+        return None
+    try:
+        total = int(rest[2:])
+    except ValueError:
+        return None
+    return total if total >= 0 else None

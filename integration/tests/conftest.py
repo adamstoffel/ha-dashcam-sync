@@ -209,6 +209,14 @@ class FakeApi:
     async def async_hint(self, camera: str | None = None) -> None:
         self._rec("hint", camera)
 
+    async def async_join_result(self, camera: str, state: str, reason: str | None) -> None:
+        self._rec("join_result", camera, state, reason)
+
+    async def async_scan_result(
+        self, request: str, accesspoints: list[dict[str, Any]], error: str | None
+    ) -> None:
+        self._rec("scan_result", request, accesspoints, error)
+
     async def async_keep(self, clip_id: int, keep: bool = True) -> None:
         self._rec("keep", clip_id, keep)
 

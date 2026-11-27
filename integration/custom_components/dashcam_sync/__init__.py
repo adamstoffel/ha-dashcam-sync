@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -36,7 +37,13 @@ from .coordinator import DashcamSyncConfigEntry, DashcamSyncCoordinator, Dashcam
 from .issues import IssueSync
 from .services import async_setup_services
 from .views import ClipFileView, ClipThumbView
-from .wifi import async_announced_wifi_adapters, async_disconnect
+from .wifi import (
+    WifiUnavailable,
+    async_announced_wifi_adapters,
+    async_disconnect,
+    async_join_camera,
+    async_scan_access_points,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -123,6 +130,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry) 
                 _LOGGER.warning("Could not disconnect the Wi-Fi for %s: %s", camera_id, err)
 
     coordinator.unsafe_handler = _disconnect_unsafe
+
+    join_locks: dict[str, asyncio.Lock] = {}
+
+    async def _join(camera_id: str) -> None:
+        """The panel asked to join a hotspot camera: do it and report back.
+
+        One join per camera at a time: a retry while a join is still running must not
+        write the interface twice.
+        """
+        async with join_locks.setdefault(camera_id, asyncio.Lock()):
+            state, reason = await async_join_camera(hass, api, camera_id)
+            _LOGGER.info("Joining the Wi-Fi for %s: %s %s", camera_id, state, reason or "")
+            try:
+                await api.async_join_result(camera_id, state, reason)
+            except Exception as err:  # the panel times out and shows the manual steps
+                _LOGGER.warning("Could not report the Wi-Fi join for %s: %s", camera_id, err)
+
+    coordinator.join_handler = _join
+
+    async def _scan(interface: str, request: str) -> None:
+        """The panel's wizard asked for the networks an interface can see."""
+        try:
+            found, error = await async_scan_access_points(hass, interface), None
+        except WifiUnavailable as err:
+            found, error = [], str(err)
+        try:
+            await api.async_scan_result(request, found, error)
+        except Exception as err:  # the wizard times out and asks for the SSID by hand
+            _LOGGER.warning("Could not report the Wi-Fi scan for %s: %s", interface, err)
+
+    coordinator.scan_handler = _scan
 
     presence = entry.options.get(CONF_PRESENCE_ENTITY)
     if presence:

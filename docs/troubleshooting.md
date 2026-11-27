@@ -4,14 +4,14 @@ Start with the diagnostics download (**Settings › Devices & services › Dashc
 
 | Symptom | Likely cause and fix |
 | --- | --- |
-| "Dashcam Sync discovered" never appears | The integration is not installed yet, or the app is stopped. Install the integration and restart Home Assistant. Otherwise add it manually: host `local-dashcam-sync`, port `8100` and the token from the app's log. |
+| "Dashcam Sync discovered" never appears | The integration is not installed yet, or the app is stopped. Install the integration and restart Home Assistant. Otherwise add it manually: set **Integration token** (32+ characters) on the app's Configuration tab, restart the app, then add the integration with host `local-dashcam-sync`, port `8100` and that token. The app's log says `Offered to Home Assistant through Supervisor discovery` when it announced itself. |
 | Repair: **No Wi-Fi adapter** | Home Assistant OS has no driver for the card. Use a supported USB adapter, or a camera that can join your home network (LAN mode). |
 | The camera never connects | Check the Wi-Fi profile (**Settings › System › Network**), the signal at the parking spot, and the address-block check. A hotspot camera needs its own adapter. |
 | Repair: **address overlap** | Something on your network uses an address in the camera's four-address block. Follow *Overlapping addresses* in the app's documentation, then press **Re-check**. The camera stays paused until the check passes. |
-| Repair: **Wi-Fi disconnected: default route moved** | After joining, the default route left the wired interface. The integration already dropped the profile. Make sure the Wi-Fi profile has no gateway and no DNS (use the options flow, not a hand-made profile). |
+| Repair: **Wi-Fi disconnected: default route moved** | After joining, the default route left the wired interface. The integration already dropped the profile. Make sure the Wi-Fi profile has no gateway and no DNS (join from the camera wizard or **Configure › Re-join a camera's Wi-Fi**, not a hand-made profile). |
 | Repair: **camera may be stuck in playback mode** | A session was interrupted before the camera was restored. Press the fix, the **Restore recording** button, or just wait: the app retries on every contact. |
 | Sync is very slow | Hotspot Wi-Fi is slow (often under 1 MB/s). Improve range, and rely on event clips. The *Download speed* sensor is disabled by default; enable it to watch the rate. |
-| Clips are not appearing | Check the **Storage** page: a network share that is not mounted is refused (the Supervisor leaves an empty folder when a share is offline). New clips are spooled locally and shipped when it returns. |
+| Clips are not appearing | Check the **Storage** page: a network share or added disk that is not mounted is refused (the Supervisor leaves an empty folder when one is offline). New clips are spooled locally and shipped when it returns. |
 | Repair: **unsupported camera** | No driver recognised it. [Capture a device profile](device-profile.md) and open an issue. |
 | The panel says the camera is "away" but it is parked next to the house | The app checks reachability on the camera's ports; confirm the Wi-Fi profile is connected and that nothing blocks the camera's address. |
 | Changing `log_level` restarts the app | Intended: it is the only option that does. Everything else is hot-reloaded. |

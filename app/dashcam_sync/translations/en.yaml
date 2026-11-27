@@ -2,10 +2,17 @@ configuration:
   log_level:
     name: Log level
     description: How much the app writes to its log. Changing this restarts the app.
+  api_token:
+    name: Integration token (optional)
+    description: >-
+      Only needed to add the integration by hand when discovery does not appear. Leave it empty
+      to use a generated token that is handed to Home Assistant automatically. If you set one
+      (at least 32 characters), enter the same value in the integration, then restart the app.
   cameras:
     name: Cameras
     description: >-
-      One entry per dashcam. The setup wizard in the Dashcam Sync panel fills this in for you.
+      One entry per dashcam. Easier to add and edit in the Dashcam Sync panel (Cameras › Add camera),
+      which lists your Wi-Fi interfaces and fills in the addresses.
     fields:
       id:
         name: ID
@@ -15,26 +22,34 @@ configuration:
         description: Display name, for example Polestar 2.
       connection:
         name: Connection
-        description: hotspot = the camera's own Wi-Fi, lan = the camera joined to your home network.
+        description: hotspot = Camera hotspot (the camera runs its own Wi-Fi), lan = Local network (the camera is a client on your LAN).
       interface:
-        name: Wi-Fi adapter
-        description: Host Wi-Fi adapter for a hotspot camera, for example wlan0.
+        name: Wi-Fi interface
+        description: The Home Assistant Wi-Fi interface that joins the camera hotspot, as shown under Settings › System › Network (for example wlp4s0).
       ssid:
-        name: Camera Wi-Fi name
-        description: The SSID of the camera's hotspot.
+        name: Camera SSID
+        description: The name of the camera's hotspot.
       wifi_password:
         name: Camera Wi-Fi password
         description: The hotspot passphrase. It is masked here and only shared with the integration.
       ipv4:
-        name: Addressing
+        name: IPv4 method
         description: >-
-          static (default) claims a small block of four addresses around the camera. auto is only safe
-          when the camera's range does not overlap your home network.
+          static (default): Home Assistant takes a fixed address next to the camera, checked against
+          your home network. auto skips the check, for an interface you set up yourself with DHCP.
+      addressing:
+        name: Address shape
+        description: >-
+          auto (default) uses a small block of four addresses around the camera and, when an address
+          in it is taken on your home network, point-to-point instead. block always uses the small
+          block. point_to_point claims only two addresses (Home Assistant's /32 and the camera's,
+          reached through a direct route).
       static_address:
         name: Home Assistant address on the camera network
         description: >-
-          Home Assistant's address with prefix length, for example 192.168.1.253/30. The wizard
-          computes it; the camera's block is derived from it.
+          Leave empty to let the app pick. With a prefix length, for example 192.168.1.253/30 for a
+          block or 192.168.1.250/32 for point-to-point. In auto, the app fills this in and changes
+          it only when the address it picked becomes taken.
       host:
         name: Camera address
         description: Camera IP or hostname. Leave empty to detect it.
@@ -49,26 +64,28 @@ configuration:
         description: Override the default sync mode for this camera.
   storage:
     name: Storage
-    description: Where clips go.
+    description: Where clips are kept. Easier to edit in the Dashcam Sync panel (Settings › Storage), which lists attached disks and shares and can move existing clips.
     fields:
       target:
-        name: Target
-        description: local = /media, network = a share added under Settings > System > Storage, both = local first then a copy.
+        name: Keep clips on
+        description: local = this Home Assistant (/media), network = a disk or share added under Settings › System › Storage, both = this Home Assistant and a copy on the disk or share.
       local_folder:
         name: Local folder
         description: Folder created under /media.
       network_folder:
-        name: Network share name
-        description: The name of the network storage you added in Home Assistant (for example nas_dashcam).
+        name: Network share or disk name
+        description: >-
+          The name of the network share or local disk (USB drive, SD card) you added under
+          Settings > System > Storage, for example nas_dashcam or dashcam_disk.
       spool_when_network_down:
-        name: Spool while the share is down
-        description: Keep new clips locally and ship them when the share returns.
+        name: Keep clips locally while the disk or share is offline
+        description: New clips wait on this Home Assistant and move over when it is back.
       keep_original:
         name: Keep original .ts files
         description: Keep the camera's original file next to the remuxed .mp4 (useful as evidence).
   retention:
     name: Retention
-    description: Rolling expiration. 0 means never expire by age (or no cap). Every rule has a network_ twin for the share.
+    description: Rolling expiration. 0 days = no age limit, 0 GB = no cap. The network_ rules apply to the disk or share. Easier to edit in the Dashcam Sync panel (Settings › Retention).
     fields:
       normal_days:
         name: Normal clips (days)
@@ -83,39 +100,39 @@ configuration:
         name: Photos (days)
         description: Delete photos older than this.
       max_total_gb:
-        name: Maximum total size (GB)
+        name: Size cap (GB)
         description: Delete oldest first until under the cap.
       min_free_percent:
         name: Minimum free space (%)
         description: Delete oldest first until free space recovers, and refuse to write below it.
       network_normal_days:
-        name: Normal clips on the share (days)
-        description: Same as above, for the network target.
+        name: Normal clips on the disk or share (days)
+        description: Same as above, for the disk or share.
       network_event_days:
-        name: Event clips on the share (days)
-        description: Same as above, for the network target.
+        name: Event clips on the disk or share (days)
+        description: Same as above, for the disk or share.
       network_parking_days:
-        name: Parking clips on the share (days)
-        description: Same as above, for the network target.
+        name: Parking clips on the disk or share (days)
+        description: Same as above, for the disk or share.
       network_photo_days:
-        name: Photos on the share (days)
-        description: Same as above, for the network target.
+        name: Photos on the disk or share (days)
+        description: Same as above, for the disk or share.
       network_max_total_gb:
-        name: Maximum size on the share (GB)
+        name: Size cap on the disk or share (GB)
         description: 0 means no cap.
       network_min_free_percent:
-        name: Minimum free space on the share (%)
-        description: Same as above, for the network target.
+        name: Minimum free space on the disk or share (%)
+        description: Same as above, for the disk or share.
       purge_time:
         name: Daily purge time
         description: Local time (HH:MM) of the daily retention run.
   sync:
     name: Sync
-    description: What to fetch and how.
+    description: What to download and what happens afterwards. Easier to edit in the Dashcam Sync panel (Settings › Sync).
     fields:
       mode:
         name: Mode
-        description: events_only = event and parking clips, events_first = those plus the most recent minutes, everything = the whole card.
+        description: events_only = Events only (event and parking clips), events_first = Events first (those, then the recent minutes), everything = Everything on the card.
       recent_minutes:
         name: Recent window (minutes)
         description: Always grab normal clips from the last N minutes before arrival.

@@ -80,6 +80,18 @@ def test_schema_covers_every_option() -> None:
     assert all(not isinstance(v, (dict, list)) for v in schema["cameras"][0].values())
 
 
+def test_every_setting_the_panel_can_save_is_in_the_schema() -> None:
+    """The Supervisor validates saved options against the schema: a field the Settings
+    page writes but the schema lacks would make saves fail (or be dropped) on a real system."""
+    from dashcam_sync.options import AppOptions, RetentionOptions, StorageOptions, SyncOptions
+
+    schema = CONFIG["schema"]
+    for name, model in (("storage", StorageOptions), ("retention", RetentionOptions),
+                        ("sync", SyncOptions)):  # fmt: skip
+        assert set(model.model_fields) <= set(schema[name]), name
+    assert set(AppOptions.model_fields) <= set(schema)
+
+
 def test_translations_name_every_option() -> None:
     tr = yaml.safe_load((APP / "translations" / "en.yaml").read_text())["configuration"]
     for key in CONFIG["schema"]:

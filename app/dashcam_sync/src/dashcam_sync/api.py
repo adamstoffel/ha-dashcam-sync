@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import json
 import logging
@@ -17,6 +18,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import aiohttp
 from aiohttp import web
+from pydantic import BaseModel, ValidationError
 
 from . import API_VERSION, __version__
 from .catalog import TARGET_LOCAL, TARGET_NETWORK
@@ -24,8 +26,9 @@ from .detect import detect
 from .errors import ConfigError, DashcamError, UnsupportedCamera
 from .hostcheck import validate_camera_host
 from .models import Kind
-from .options import CameraOptions
+from .options import CameraOptions, RetentionOptions, StorageOptions, SyncOptions
 from .profile import capture_profile
+from .storage import attached_storage
 from .supervisor import SupervisorError
 
 if TYPE_CHECKING:
@@ -45,6 +48,16 @@ def _daemon(request: web.Request) -> Daemon:
 
 def _error(status: int, message: str, **extra: Any) -> web.Response:
     return web.json_response({"error": message, **extra}, status=status)
+
+
+def _invalid(err: ValueError) -> str:
+    """A readable first problem from a validation error: ``field: reason``."""
+    if isinstance(err, ValidationError) and err.errors():
+        first = err.errors()[0]
+        where = ".".join(str(p) for p in first.get("loc", ()))
+        reason = str(first.get("msg", "invalid")).removeprefix("Value error, ")
+        return f"{where}: {reason}" if where else reason
+    return str(err).splitlines()[0]
 
 
 async def _json(request: web.Request) -> dict[str, Any]:
@@ -100,6 +113,10 @@ async def errors_middleware(request: web.Request, handler: Any) -> web.StreamRes
         raise
     except ConfigError as err:
         return _error(400, str(err))
+    except SupervisorError as err:
+        # 400 is the Supervisor refusing the options (it names the field); else unreachable.
+        status = 400 if err.status == 400 else 502
+        return _error(status, f"Home Assistant refused this: {err}")
     except DashcamError as err:
         return _error(502, str(err))
 
@@ -116,7 +133,7 @@ async def info(request: web.Request) -> web.Response:
     return web.json_response(
         {
             "api_version": API_VERSION,
-            "app_version": __version__,
+            "app_version": d.installed_version,
             "name": "Dashcam Sync",
             "instance": d.instance_id,
             "cameras": len(d.workers),
@@ -160,7 +177,7 @@ async def websocket(request: web.Request) -> web.StreamResponse:
 def _redacted_camera(cam: CameraOptions, expose: bool) -> dict[str, Any]:
     data = cam.model_dump()
     if not expose:
-        data["wifi_password"] = "********" if cam.wifi_password else None
+        data["wifi_password"] = MASK if cam.wifi_password else None
     return data
 
 
@@ -230,7 +247,7 @@ async def camera_patch(request: web.Request) -> web.Response:
     try:  # validate the merged entry: a bad value must not make the camera vanish
         CameraOptions.model_validate({**cam.model_dump(exclude_none=True), **body})
     except ValueError as err:
-        return _error(400, str(err).splitlines()[0])
+        return _error(400, _invalid(err))
 
     def mutate(raw: dict[str, Any]) -> None:
         for entry in raw.get("cameras", []):
@@ -267,6 +284,8 @@ async def camera_wifi(request: web.Request) -> web.Response:
             "static_address": block.static_address,
             "block": str(block.network),
             "camera": str(block.camera),
+            "gateway": block.gateway,
+            "mode": block.mode,
             "ipv4": cam.effective_ipv4,
         }
     )
@@ -384,8 +403,7 @@ async def clip_delete(request: web.Request) -> web.Response:
     clip_id = _clip_id(request)
     if d.cat.get_clip(clip_id) is None:
         return _error(404, "unknown clip")
-    assert d.retention is not None
-    freed = await asyncio.to_thread(d.retention.delete_clip_everywhere, clip_id)
+    freed = await d.delete_clip(clip_id)
     d.bus.publish("clip_deleted", clip_id=clip_id)
     return web.json_response({"ok": True, "bytes_freed": freed})
 
@@ -433,6 +451,135 @@ async def storage(request: web.Request) -> web.Response:
     return web.json_response(await asyncio.to_thread(_daemon(request).storage_payload))
 
 
+MASK = "********"
+LOCATION_FIELDS = ("target", "local_folder", "network_folder")
+
+
+async def storage_location_get(request: web.Request) -> web.Response:
+    """The current location settings and the disks and shares that can be chosen."""
+    d = _daemon(request)
+    opts = d.options.storage
+    attached = await asyncio.to_thread(
+        attached_storage, d.config.media_root, d.config.share_root, d.config.mountinfo
+    )
+    return web.json_response(
+        {
+            "current": {k: getattr(opts, k) for k in LOCATION_FIELDS},
+            "attached": attached,
+        }
+    )
+
+
+async def storage_location_set(request: web.Request) -> web.Response:
+    """Change where new clips go; existing clips are moved separately (``migration``)."""
+    d = _daemon(request)
+    if d.migration.running:
+        return _error(409, "clips are being moved; cancel that first")
+    body = await _json(request)
+    changes = {k: body[k] for k in LOCATION_FIELDS if k in body}
+    if not changes:
+        return _error(400, "nothing to change")
+    merged = {**d.options.storage.model_dump(), **changes}
+    try:
+        checked = StorageOptions.model_validate(merged)
+    except ValueError as err:
+        return _error(400, _invalid(err))
+    if checked.target in ("network", "both") and not checked.network_folder:
+        return _error(400, "choose a network share or disk")
+
+    def mutate(raw: dict[str, Any]) -> None:
+        storage = raw.setdefault("storage", {})
+        for key in changes:
+            storage[key] = getattr(checked, key)
+
+    await d.update_raw_options(mutate)
+    plan = await d.migration_plan()
+    return web.json_response(d.migration_payload(plan))
+
+
+SETTINGS_SECTIONS: dict[str, type[BaseModel]] = {
+    "sync": SyncOptions,
+    "storage": StorageOptions,
+    "retention": RetentionOptions,
+}
+
+
+def _settings_payload(d: Daemon) -> dict[str, Any]:
+    opts = d.options
+    return {name: getattr(opts, name).model_dump() for name in SETTINGS_SECTIONS}
+
+
+async def settings_get(request: web.Request) -> web.Response:
+    return web.json_response(_settings_payload(_daemon(request)))
+
+
+async def settings_set(request: web.Request) -> web.Response:
+    """Change sync, storage and retention settings; each section is validated whole."""
+    d = _daemon(request)
+    body = await _json(request)
+    unknown = set(body) - set(SETTINGS_SECTIONS)
+    if unknown:
+        return _error(400, f"cannot change {sorted(unknown)} here")
+    checked: dict[str, Any] = {}
+    for name, model in SETTINGS_SECTIONS.items():
+        changes = body.get(name)
+        if changes is None:
+            continue
+        if not isinstance(changes, dict):
+            return _error(400, f"{name} must be an object")
+        current = getattr(d.options, name).model_dump()
+        stray = set(changes) - set(current)
+        if stray:
+            return _error(400, f"unknown {name} settings: {sorted(stray)}")
+        try:
+            checked[name] = (model.model_validate({**current, **changes}), set(changes))
+        except ValueError as err:
+            return _error(400, f"{name}.{_invalid(err)}")
+    storage = checked.get("storage")
+    moved = False
+    if storage is not None:
+        new, keys = storage
+        moved = any(getattr(new, k) != getattr(d.options.storage, k) for k in LOCATION_FIELDS)
+        if moved and d.migration.running:
+            return _error(409, "clips are being moved; cancel that first")
+        if new.target in ("network", "both") and not new.network_folder:
+            return _error(400, "storage.network_folder: choose a network share or disk")
+
+    def mutate(raw: dict[str, Any]) -> None:
+        for name, (model_value, keys) in checked.items():
+            section = raw.setdefault(name, {})
+            for key in keys:
+                section[key] = getattr(model_value, key)
+
+    if checked:
+        await d.update_raw_options(mutate)
+    out = _settings_payload(d)
+    if moved:
+        out["migration"] = d.migration_payload(await d.migration_plan())
+    return web.json_response(out)
+
+
+async def migration_get(request: web.Request) -> web.Response:
+    d = _daemon(request)
+    plan = None if d.migration.running else await d.migration_plan()
+    return web.json_response(d.migration_payload(plan))
+
+
+async def migration_start(request: web.Request) -> web.Response:
+    d = _daemon(request)
+    try:
+        plan = await d.start_migration()
+    except ValueError as err:
+        return _error(409, str(err))
+    return web.json_response(d.migration_payload(plan), status=202)
+
+
+async def migration_cancel(request: web.Request) -> web.Response:
+    d = _daemon(request)
+    d.migration.cancel()
+    return web.json_response(d.migration_payload())
+
+
 async def sessions(request: web.Request) -> web.Response:
     d = _daemon(request)
     try:
@@ -462,25 +609,66 @@ async def options_get(request: web.Request) -> web.Response:
 # ------------------------------------------------------------------- wizard
 
 
+def _access_points(raw: Any) -> list[dict[str, Any]]:
+    """Scan results, cleaned: strings and numbers only, strongest first, no duplicates."""
+    best: dict[str, dict[str, Any]] = {}
+    for ap in raw if isinstance(raw, list) else []:
+        if not isinstance(ap, dict) or not isinstance(ap.get("ssid"), str) or not ap["ssid"]:
+            continue
+        signal = ap.get("signal") if isinstance(ap.get("signal"), int) else None
+        entry = {"ssid": ap["ssid"][:64], "signal": signal, "mode": str(ap.get("mode") or "")[:20]}
+        seen = best.get(entry["ssid"])
+        if seen is None or (signal or -1) > (seen["signal"] or -1):
+            best[entry["ssid"]] = entry
+    return sorted(best.values(), key=lambda a: -(a["signal"] or -1))[:100]
+
+
 async def wizard_wifi_scan(request: web.Request) -> web.Response:
+    """Networks a Wi-Fi interface can see: the Supervisor directly, else through Home Assistant."""
     d = _daemon(request)
     interface = request.query.get("interface", "")
-    if d.supervisor is None or not d.supervisor.available:
-        return web.json_response({"available": False, "accesspoints": []})
-    try:
-        aps = await d.supervisor.access_points(interface)
-    except SupervisorError as err:
-        # The default role may not be allowed to scan: the wizard asks for the SSID by hand.
-        return web.json_response({"available": False, "accesspoints": [], "reason": str(err)})
+    if not interface:
+        return _error(400, "interface is required")
+    if d.supervisor is not None and d.supervisor.available:
+        try:
+            aps = await d.supervisor.access_points(interface)
+            return web.json_response(
+                {"available": True, "via": "app", "accesspoints": _access_points(aps)}
+            )
+        except SupervisorError:
+            pass  # the default role may not scan: ask Home Assistant instead
+    result = await d.scan_via_home_assistant(interface)
+    if result.get("error"):
+        return web.json_response(
+            {"available": False, "accesspoints": [], "reason": result["error"]}
+        )
     return web.json_response(
         {
             "available": True,
-            "accesspoints": [
-                {"ssid": ap.get("ssid"), "signal": ap.get("signal"), "mode": ap.get("mode")}
-                for ap in aps
-            ],
+            "via": "home_assistant",
+            "accesspoints": _access_points(result.get("accesspoints")),
         }
     )
+
+
+async def wizard_wifi_scan_result(request: web.Request) -> web.Response:
+    """The integration answers a scan request (token port only)."""
+    d = _daemon(request)
+    if not request.app[SECRETS]:
+        return _error(403, "only Home Assistant reports scan results")
+    body = await _json(request)
+    req = body.get("request")
+    if not isinstance(req, str):
+        return _error(400, "request is required")
+    error = body.get("error")
+    result = (
+        {"error": str(error)[:200]}
+        if error
+        else {"accesspoints": _access_points(body.get("accesspoints"))}
+    )
+    if not d.set_scan_result(req, result):
+        return _error(404, "no scan is waiting for that request")
+    return web.json_response({"ok": True})
 
 
 async def wizard_probe(request: web.Request) -> web.Response:
@@ -550,17 +738,93 @@ async def wizard_storage_test(request: web.Request) -> web.Response:
     )
 
 
+JOIN_STATES = ("joined", "failed", "manual")
+
+
+async def wizard_interfaces(request: web.Request) -> web.Response:
+    """Wi-Fi interfaces Home Assistant reports, for the hotspot camera's adapter choice."""
+    d = _daemon(request)
+    return web.json_response(
+        {
+            "known": d.network.known,
+            "error": d.network.error,
+            "wireless": [
+                {
+                    "name": i.name,
+                    "enabled": i.enabled,
+                    "connected": i.connected,
+                    "ssid": i.ssid,
+                    "signal": i.signal,
+                    "in_use_by": next(
+                        (
+                            c.id
+                            for c in d.options.cameras
+                            if c.connection == "hotspot" and c.interface == i.name
+                        ),
+                        None,
+                    ),
+                }
+                for i in d.network.interfaces
+                if i.wireless
+            ],
+        }
+    )
+
+
+async def camera_join(request: web.Request) -> web.Response:
+    """Ask Home Assistant to join this hotspot camera's Wi-Fi."""
+    d, cam = _camera(request)
+    if cam.connection != "hotspot":
+        return _error(400, "not a hotspot camera")
+    return web.json_response(d.request_join(cam))
+
+
+async def camera_join_status(request: web.Request) -> web.Response:
+    d, cam = _camera(request)
+    return web.json_response(d.join_status(cam))
+
+
+async def camera_join_result(request: web.Request) -> web.Response:
+    """The integration reports how a join went (token API only)."""
+    d, cam = _camera(request)
+    if not request.app[SECRETS]:
+        return _error(403, "only Home Assistant reports join results")
+    body = await _json(request)
+    state = body.get("state")
+    if state not in JOIN_STATES:
+        return _error(400, f"state must be one of {list(JOIN_STATES)}")
+    reason = body.get("reason")
+    d.set_join_result(cam.id, str(state), str(reason)[:200] if reason else None)
+    return web.json_response({"ok": True})
+
+
 async def wizard_save_camera(request: web.Request) -> web.Response:
     d = _daemon(request)
     body = await _json(request)
+    existing = d.options.camera(str(body.get("id") or ""))
+    if existing is not None and body.get("wifi_password") in (None, "", MASK):
+        # Editing without retyping the password: keep the stored one.
+        body["wifi_password"] = existing.wifi_password
     try:
         cam = CameraOptions.model_validate(body)
     except ValueError as err:
-        return _error(400, str(err).splitlines()[0])
+        return _error(400, _invalid(err))
     if cam.host:
         await _camera_host(d, cam.host)
     entry = {k: v for k, v in cam.model_dump().items() if v is not None}
-    if cam.connection == "hotspot" and not entry.get("static_address") and cam.ipv4 != "auto":
+    if (
+        existing is not None
+        and existing.effective_addressing != cam.effective_addressing
+        and cam.static_address == existing.static_address
+    ):
+        # The address was picked for the old shape: let the new one pick its own.
+        entry.pop("static_address", None)
+    if (
+        cam.connection == "hotspot"
+        and not entry.get("static_address")
+        and cam.ipv4 != "auto"
+        and cam.effective_addressing == "block"
+    ):
         ip = d.camera_ip(cam)
         if ip:
             from .netblock import compute_block
@@ -648,6 +912,13 @@ def _add_routes(app: web.Application) -> None:
     r.add_get(f"{API}/clips/{{clip}}/thumb", clip_thumb)
     r.add_post(f"{API}/purge", purge)
     r.add_get(f"{API}/storage", storage)
+    r.add_get(f"{API}/settings", settings_get)
+    r.add_patch(f"{API}/settings", settings_set)
+    r.add_get(f"{API}/storage/location", storage_location_get)
+    r.add_patch(f"{API}/storage/location", storage_location_set)
+    r.add_get(f"{API}/storage/migration", migration_get)
+    r.add_post(f"{API}/storage/migration", migration_start)
+    r.add_delete(f"{API}/storage/migration", migration_cancel)
     r.add_get(f"{API}/logs", logs)
     r.add_get(f"{API}/sessions", sessions)
     r.add_get(f"{API}/options", options_get)
@@ -658,6 +929,11 @@ def _add_routes(app: web.Application) -> None:
     r.add_post(f"{API}/wizard/camera", wizard_save_camera)
     r.add_post(f"{API}/wizard/capture-profile", wizard_capture_profile)
     r.add_post(f"{API}/wizard/station", wizard_station)
+    r.add_get(f"{API}/wizard/interfaces", wizard_interfaces)
+    r.add_post(f"{API}/wizard/wifi-scan-result", wizard_wifi_scan_result)
+    r.add_post(f"{API}/cameras/{{camera}}/join", camera_join)
+    r.add_get(f"{API}/cameras/{{camera}}/join", camera_join_status)
+    r.add_post(f"{API}/cameras/{{camera}}/join-result", camera_join_result)
 
 
 def build_api_app(daemon: Daemon) -> web.Application:
@@ -669,6 +945,19 @@ def build_api_app(daemon: Daemon) -> web.Application:
     return app
 
 
+def _versioned_index() -> str:
+    """index.html with ``?v=<content hash>`` on the script and style URLs.
+
+    Browsers (and the Home Assistant app) keep an embedded panel's files cached; a URL
+    that changes whenever the file changes is the only reliable way to ship an update.
+    """
+    page = (STATIC_DIR / "index.html").read_text("utf-8")
+    for name in ("app.js", "style.css"):
+        digest = hashlib.sha256((STATIC_DIR / name).read_bytes()).hexdigest()[:12]
+        page = page.replace(f'"static/{name}"', f'"static/{name}?v={digest}"')
+    return page
+
+
 def build_ui_app(daemon: Daemon) -> web.Application:
     """Ingress app: static SPA plus the same routes, Supervisor proxy only."""
     app = web.Application(
@@ -678,9 +967,27 @@ def build_ui_app(daemon: Daemon) -> web.Application:
     app[SECRETS] = False
     _add_routes(app)
 
-    async def index(request: web.Request) -> web.StreamResponse:
-        return web.FileResponse(STATIC_DIR / "index.html")
+    page = _versioned_index()
 
+    async def index(request: web.Request) -> web.StreamResponse:
+        # Always revalidated; the script and style it names change URL with their content.
+        return web.Response(
+            text=page, content_type="text/html", headers={"Cache-Control": "no-cache"}
+        )
+
+    @web.middleware
+    async def static_headers(request: web.Request, handler: Any) -> web.StreamResponse:
+        response: web.StreamResponse = await handler(request)
+        if request.path.startswith("/static/"):
+            # A versioned URL never changes content: cache it. An unversioned one must
+            # be checked every time, so an old copy can never outlive an update.
+            versioned = "v" in request.query
+            response.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable" if versioned else "no-cache"
+            )
+        return response
+
+    app.middlewares.append(static_headers)
     app.router.add_get("/", index)
     app.router.add_static("/static", STATIC_DIR, show_index=False)
     return app

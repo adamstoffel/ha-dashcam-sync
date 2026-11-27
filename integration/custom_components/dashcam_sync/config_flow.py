@@ -278,8 +278,8 @@ class DashcamSyncOptionsFlow(OptionsFlow):
         assert self._camera is not None
         api = self._entry.runtime_data.api
         try:
-            profile = profile_from_api(await api.async_wifi(self._camera))
             report = await api.async_overlap(self._camera, known_device_ips(self.hass))
+            profile = profile_from_api(await api.async_wifi(self._camera))
         except (DashcamSyncError, KeyError, ValueError):
             return self.async_abort(reason="app_unavailable")
         placeholders = {**profile.as_placeholders(), "camera": self._camera,

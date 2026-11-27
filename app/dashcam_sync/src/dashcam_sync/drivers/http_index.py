@@ -85,6 +85,7 @@ class HttpIndexDriver(BaseDriver):
         seen: set[str] = set()
         queue: list[tuple[str, int]] = [("/", 0)]
         visited = 0
+        self.listing_complete = True
         while queue and visited < MAX_FOLDERS:
             path, depth = queue.pop(0)
             if path in seen:
@@ -94,6 +95,7 @@ class HttpIndexDriver(BaseDriver):
             try:
                 html = await self.http.get_text(path)
             except ProtocolError:
+                self.listing_complete = False  # a folder we could not read
                 continue
             for link in parse_links(html):
                 target = urlsplit(urljoin(f"http://{self.host}{path}", link))
@@ -105,6 +107,8 @@ class HttpIndexDriver(BaseDriver):
                 elif clean.endswith("/") and depth < MAX_DEPTH and clean not in seen:
                     if len(clean) > len(path) and clean.startswith(path):
                         queue.append((clean, depth + 1))
+        if queue:
+            self.listing_complete = False  # stopped at MAX_FOLDERS with folders left
         return recs
 
     async def _recording(self, path: str) -> Recording:

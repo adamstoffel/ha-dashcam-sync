@@ -4,6 +4,13 @@ Many cameras live on 192.168.1.x or 192.168.0.x, ranges that home networks
 also use. Linux always routes to the most specific prefix, so Home Assistant
 claims only the smallest block that holds both itself and the camera, and
 only that block is routed to the car.
+
+When the camera's range sits inside the home network and an address in that
+block is taken, there is a second shape, **point-to-point**: Home Assistant
+takes one free address next to the camera as a /32 and reaches the camera
+through a host route (set as the profile's gateway, which NetworkManager
+installs as a direct route). Only two addresses are claimed: Home
+Assistant's and the camera's. ``choose_block`` picks the shape.
 """
 
 from __future__ import annotations
@@ -28,6 +35,11 @@ class CameraBlock:
     network: IPv4Net
     camera: IPv4Addr
     host: IPv4Addr
+    point_to_point: bool = False
+
+    @property
+    def mode(self) -> Literal["block", "point_to_point"]:
+        return "point_to_point" if self.point_to_point else "block"
 
     @property
     def static_address(self) -> str:
@@ -35,17 +47,30 @@ class CameraBlock:
         return f"{self.host}/{self.network.prefixlen}"
 
     @property
+    def gateway(self) -> str | None:
+        """Point-to-point only: the camera, so a direct route to it is installed."""
+        return str(self.camera) if self.point_to_point else None
+
+    def claimed(self) -> list[IPv4Addr]:
+        """Every address Home Assistant routes to the car (unreachable at home meanwhile)."""
+        if self.point_to_point:
+            return sorted({self.camera, self.host})
+        return list(self.network)
+
+    @property
     def first(self) -> IPv4Addr:
-        return self.network.network_address
+        return min(self.claimed())
 
     @property
     def last(self) -> IPv4Addr:
-        return self.network.broadcast_address
+        return max(self.claimed())
 
     def addresses(self) -> list[IPv4Addr]:
-        return list(self.network)
+        return self.claimed()
 
     def describe(self) -> str:
+        if self.point_to_point:
+            return f"{self.camera} and {self.host} only"
         return f"{self.first} to {self.last}"
 
 
@@ -82,11 +107,56 @@ def _pick_host(network: IPv4Net, camera: IPv4Addr) -> IPv4Addr | None:
     return None
 
 
-def block_from_static(static_address: str, camera_ip: str) -> CameraBlock:
-    """Rebuild a block from a stored static_address plus the camera IP."""
-    iface = ipaddress.ip_interface(static_address)
+def point_to_point(camera_ip: str, host_ip: str) -> CameraBlock:
+    """Home Assistant at ``host_ip``/32 with a direct route to the camera."""
+    try:
+        camera = ipaddress.IPv4Address(camera_ip)
+        host = ipaddress.IPv4Address(host_ip)
+    except ValueError as err:
+        raise ConfigError(f"not an IPv4 address: {err}") from err
+    if host == camera:
+        raise ConfigError("Home Assistant and the camera cannot share an address")
+    if host.is_loopback or host.is_multicast or host.is_unspecified or host.is_link_local:
+        raise ConfigError(f"{host} cannot be Home Assistant's address")
+    return CameraBlock(
+        network=ipaddress.IPv4Network(f"{host}/32"), camera=camera, host=host, point_to_point=True
+    )
+
+
+def point_to_point_candidates(camera_ip: str, prefix: int = 24, limit: int = 8) -> list[str]:
+    """Addresses to try for Home Assistant, from the top of the camera's own subnet.
+
+    The camera answers only addresses inside its subnet (almost always a /24), so
+    the address must be there; the top end is usually outside the camera's DHCP
+    pool (which hands out from .100 or .2 upwards).
+    """
+    camera = ipaddress.IPv4Address(camera_ip)
+    subnet = ipaddress.IPv4Network(f"{camera}/{prefix}", strict=False)
+    out: list[str] = []
+    for value in range(int(subnet.broadcast_address) - 1, int(subnet.network_address), -1):
+        addr = ipaddress.IPv4Address(value)
+        if addr != camera:
+            out.append(str(addr))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def block_from_static(
+    static_address: str, camera_ip: str, *, force_point_to_point: bool = False
+) -> CameraBlock:
+    """Rebuild a block from a stored static_address plus the camera IP.
+
+    A /32 (or ``force_point_to_point``) means point-to-point.
+    """
+    try:
+        iface = ipaddress.ip_interface(static_address)
+    except ValueError as err:
+        raise ConfigError(f"not an address with a prefix: {static_address}") from err
     if not isinstance(iface, ipaddress.IPv4Interface):
         raise ConfigError("static_address must be IPv4")
+    if force_point_to_point or iface.network.prefixlen == 32:
+        return point_to_point(camera_ip, str(iface.ip))
     camera = ipaddress.IPv4Address(camera_ip)
     network = iface.network
     if camera not in network:
@@ -128,6 +198,8 @@ class OverlapReport:
     home_networks: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
     probed: bool = False
+    # How each conflicting address answered, e.g. "answers ping".
+    evidence: dict[str, str] = field(default_factory=dict)
 
     @property
     def blocked(self) -> bool:
@@ -143,39 +215,47 @@ class OverlapReport:
             "camera": str(self.block.camera),
             "home_address": str(self.block.host),
             "static_address": self.block.static_address,
+            "mode": self.block.mode,
+            "gateway": self.block.gateway,
+            "claimed": [str(a) for a in self.block.claimed()] if self.block.point_to_point else [],
             "home_networks": self.home_networks,
             "conflicts": self.conflicts,
             "probed": self.probed,
+            "evidence": self.evidence,
         }
 
 
-ProbeFn = Callable[[str], Awaitable[bool]]
+# A probe answers with how the address answered (truthy text), or a false value.
+ProbeFn = Callable[[str], Awaitable[bool | str]]
 
 
-async def tcp_probe(ip: str, ports: tuple[int, ...] = (80, 443), timeout: float = 1.0) -> bool:
-    """True when something answers: ping, an accepted or a refused TCP port.
+async def tcp_probe(ip: str, ports: tuple[int, ...] = (80, 443), timeout: float = 1.0) -> str:
+    """How something answers at ``ip``: ping, an accepted or a refused TCP port.
 
-    A refused connection still proves a host exists at the address.
+    Returns ``""`` when nothing does. A refused connection normally proves a host
+    exists (it sent a reset), so it counts, but it is named, because a firewall
+    rejecting on the host's behalf looks the same.
     """
     if await _ping(ip, timeout):
-        return True
+        return "answers ping"
 
-    async def one(port: int) -> bool:
+    async def one(port: int) -> str:
         try:
             _, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout)
         except ConnectionRefusedError:
-            return True
+            return f"refused a connection on port {port} (no ping answer)"
         except (TimeoutError, OSError):
-            return False
+            return ""
         writer.close()
         try:
             await writer.wait_closed()
         except OSError:
             pass
-        return True
+        return f"accepts connections on port {port}"
 
     results = await asyncio.gather(*(one(p) for p in ports))
-    return any(results)
+    accepted = [r for r in results if r.startswith("accepts")]
+    return (accepted or [r for r in results if r] or [""])[0]
 
 
 async def _ping(ip: str, timeout: float) -> bool:
@@ -216,7 +296,8 @@ async def check_overlap(
     addresses (and the camera's own) over Ethernet. Pass ``None`` to skip it.
     """
     nets = list(home_networks)
-    overlaps = any(block.network.overlaps(net) for net in nets)
+    claimed = block.claimed()
+    overlaps = any(addr in net for net in nets for addr in claimed)
     report = OverlapReport(
         result="overlap_block_free" if overlaps else "no_overlap",
         block=block,
@@ -229,7 +310,7 @@ async def check_overlap(
             ip = ipaddress.IPv4Address(text)
         except ValueError:
             continue
-        if ip in block.network:
+        if ip in claimed:
             in_block.append(str(ip))
     if in_block:
         report.result = "device_in_block"
@@ -238,18 +319,93 @@ async def check_overlap(
 
     if probe is not None:
         report.probed = True
-        camera_answers = await probe(str(block.camera))
-        if camera_answers:
+
+        async def ask(addr: str) -> bool:
+            answer = await probe(addr)
+            if answer:
+                report.evidence[addr] = answer if isinstance(answer, str) else "answered"
+            return bool(answer)
+
+        if await ask(str(block.camera)):
             report.result = "camera_collides"
             report.conflicts = [str(block.camera)]
             return report
-        answering = [
-            str(addr)
-            for addr in block.addresses()
-            if addr != block.camera and await probe(str(addr))
-        ]
+        others = [str(a) for a in block.addresses() if a != block.camera]
+        answers = await asyncio.gather(*(ask(a) for a in others))  # in parallel
+        answering = [a for a, yes in zip(others, answers, strict=True) if yes]
         if answering:
             report.result = "address_in_use"
             report.conflicts = answering
             return report
     return report
+
+
+Addressing = Literal["auto", "block", "point_to_point"]
+
+
+async def choose_block(
+    camera_ip: str,
+    home_networks: Iterable[IPv4Net],
+    *,
+    addressing: Addressing = "auto",
+    static_address: str | None = None,
+    known_device_ips: Iterable[str] = (),
+    probe: ProbeFn | None = None,
+) -> OverlapReport:
+    """Pick Home Assistant's address on the camera network and check it.
+
+    - ``block``: the small block (``static_address`` fixes it), checked.
+    - ``point_to_point``: ``static_address`` fixes Home Assistant's address;
+      without one, the first free candidate next to the camera.
+    - ``auto``: keep ``static_address`` (an earlier pick) while it is still
+      free, else the small block, else point-to-point. When nothing is free,
+      the small block's report is returned: it explains the conflict best.
+
+    A conflict on the camera's own address cannot be avoided by any shape.
+    """
+    nets = list(home_networks)
+    known = list(known_device_ips)
+    # Each address is probed once, however many shapes include it, and candidates are
+    # probed together: the whole choice must fit the integration's request timeout.
+    probed: dict[str, asyncio.Task[bool | str]] = {}
+
+    async def once(ip: str) -> bool | str:
+        assert probe is not None
+        if ip not in probed:
+            probed[ip] = asyncio.ensure_future(probe(ip))
+        return await probed[ip]
+
+    cached = once if probe is not None else None
+
+    async def check(block: CameraBlock) -> OverlapReport:
+        return await check_overlap(block, nets, known_device_ips=known, probe=cached)
+
+    if addressing == "block":
+        block = (
+            block_from_static(static_address, camera_ip)
+            if static_address
+            else compute_block(camera_ip)
+        )
+        return await check(block)
+    if addressing == "point_to_point" and static_address:
+        return await check(block_from_static(static_address, camera_ip, force_point_to_point=True))
+
+    first: OverlapReport | None = None
+    if addressing == "auto":
+        if static_address:
+            remembered = await check(block_from_static(static_address, camera_ip))
+            if not remembered.blocked or remembered.result == "camera_collides":
+                return remembered
+        first = await check(compute_block(camera_ip))
+        if not first.blocked or first.result == "camera_collides":
+            return first
+    candidates = point_to_point_candidates(camera_ip)
+    if cached is not None:
+        await asyncio.gather(*(cached(c) for c in candidates))
+    for candidate in candidates:
+        report = await check(point_to_point(camera_ip, candidate))
+        if not report.blocked or report.result == "camera_collides":
+            return report
+        first = first or report
+    assert first is not None
+    return first

@@ -42,6 +42,9 @@ class BaseDriver:
     def __init__(self, http: CameraHttp) -> None:
         self.http = http
         self.host = ""
+        # Set by list_recordings: False when part of the card could not be listed (a
+        # folder failed, a limit was hit). Only a complete listing proves a file is gone.
+        self.listing_complete = True
 
     def attach(self, host: str) -> None:
         self.host = host

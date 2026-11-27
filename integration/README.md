@@ -11,7 +11,7 @@ The integration does not talk to cameras itself; it talks to the Dashcam Sync ap
 | Driver | Typical cameras |
 | --- | --- |
 | `novatek` | Novatek NT96xxx clones (FitcamX-style), default address 192.168.1.254 |
-| `viidure_app` | Cameras using the Viidure `/app` API, default address 192.168.169.1 |
+| `viidure_app` | Cameras using the Viidure `/app` API, default address 192.168.169.1 or 192.168.0.1 |
 | `http_index` | Any camera that serves an HTML directory listing of video files |
 
 BlackVue, AIT and Ambarella families are planned. If your camera is unsupported, the app can capture a redacted device profile that a contributor can turn into a driver.

@@ -30,6 +30,9 @@ class CameraOptions(BaseModel):
     wifi_password: str | None = None
     ipv4: Literal["auto", "static"] | None = None
     static_address: str | None = None
+    # How Home Assistant takes an address on a hotspot camera's network:
+    # auto (small block, else point-to-point), block, or point_to_point.
+    addressing: Literal["auto", "block", "point_to_point"] | None = None
     host: str | None = None
     driver: Literal["auto", "novatek", "viidure_app", "http_index"] = "auto"
     enabled: bool = True
@@ -52,6 +55,10 @@ class CameraOptions(BaseModel):
     @property
     def display_name(self) -> str:
         return self.name or self.id
+
+    @property
+    def effective_addressing(self) -> Literal["auto", "block", "point_to_point"]:
+        return self.addressing or "auto"
 
     @property
     def effective_ipv4(self) -> Literal["auto", "static"]:
@@ -79,17 +86,17 @@ class StorageOptions(BaseModel):
 class RetentionOptions(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    normal_days: int = 14
-    event_days: int = 0
-    parking_days: int = 30
-    photo_days: int = 90
-    max_total_gb: int = 200
+    normal_days: int = Field(default=14, ge=0)
+    event_days: int = Field(default=0, ge=0)
+    parking_days: int = Field(default=30, ge=0)
+    photo_days: int = Field(default=90, ge=0)
+    max_total_gb: int = Field(default=200, ge=0)
     min_free_percent: int = Field(default=10, ge=0, le=90)
-    network_normal_days: int = 90
-    network_event_days: int = 0
-    network_parking_days: int = 30
-    network_photo_days: int = 90
-    network_max_total_gb: int = 0
+    network_normal_days: int = Field(default=90, ge=0)
+    network_event_days: int = Field(default=0, ge=0)
+    network_parking_days: int = Field(default=30, ge=0)
+    network_photo_days: int = Field(default=90, ge=0)
+    network_max_total_gb: int = Field(default=0, ge=0)
     network_min_free_percent: int = Field(default=5, ge=0, le=90)
     purge_time: str = "03:30"
 

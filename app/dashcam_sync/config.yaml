@@ -66,6 +66,7 @@ options:
     thumbnails: true
 schema:
   log_level: list(debug|info|warning|error)?
+  api_token: password?
   cameras:
     - id: match(^[a-z0-9_]{1,32}$)
       name: str
@@ -73,12 +74,13 @@ schema:
       interface: str?
       ssid: str?
       wifi_password: password?
-      ipv4: list(auto|static)?
+      ipv4: list(static|auto)?          # first = what the Configuration tab preselects
+      addressing: list(auto|block|point_to_point)?
       static_address: match(^\d+\.\d+\.\d+\.\d+/\d+$)?
       host: str?
       driver: list(auto|novatek|viidure_app|http_index)
       enabled: bool
-      sync_mode: list(events_only|events_first|everything)?
+      sync_mode: list(events_first|events_only|everything)?
   storage:
     target: list(local|network|both)
     local_folder: str

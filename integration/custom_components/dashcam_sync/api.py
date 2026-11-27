@@ -138,6 +138,20 @@ class DashcamSyncApi:
             )
         )
 
+    async def async_join_result(self, camera: str, state: str, reason: str | None) -> None:
+        await self._request(
+            "POST", f"cameras/{camera}/join-result", json={"state": state, "reason": reason}
+        )
+
+    async def async_scan_result(
+        self, request: str, accesspoints: list[dict[str, Any]], error: str | None
+    ) -> None:
+        await self._request(
+            "POST",
+            "wizard/wifi-scan-result",
+            json={"request": request, "accesspoints": accesspoints, "error": error},
+        )
+
     async def async_hint(self, camera: str | None = None) -> None:
         await self._request("POST", "hint", json={"camera": camera} if camera else {})
 

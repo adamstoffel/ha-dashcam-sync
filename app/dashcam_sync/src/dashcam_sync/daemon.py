@@ -11,6 +11,7 @@ import os
 import secrets
 import signal
 import socket
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -27,11 +28,12 @@ from .drivers import DRIVER_BY_NAME
 from .engine import CameraWorker, SyncContext, Timing
 from .errors import ConfigError
 from .events import EventBus
+from .migrate import Migration, MigrationPlan, plan_migration
 from .netblock import (
     CameraBlock,
     OverlapReport,
     block_from_static,
-    check_overlap,
+    choose_block,
     compute_block,
     tcp_probe,
 )
@@ -57,12 +59,17 @@ from .supervisor import (
 
 _LOGGER = logging.getLogger(__name__)
 
+MIN_TOKEN_LENGTH = 32
+JOIN_TIMEOUT = 45.0  # seconds to wait for Home Assistant to answer a join request
+SCAN_TIMEOUT = 25.0  # seconds to wait for Home Assistant to answer a Wi-Fi scan
+
 NETWORK_POLL = 15.0
 NETWORK_POLL_JOINED = 5.0
 OVERLAP_RECHECK = 6 * 3600.0
 SHIP_INTERVAL = 60.0
 NETWORK_OFFLINE_REPAIR_AFTER = 3600.0
 OPTIONS_POLL = 2.0
+OPTIONS_SYNC = 15.0  # seconds between checks for options edited in the Configuration tab
 
 
 @dataclass(slots=True)
@@ -124,6 +131,7 @@ class Daemon:
         self.flags: RestoreFlags | None = None
         self.network = NetworkMonitor(None)
         self.supervisor: SupervisorClient | None = None
+        self.installed_version: str = __version__
         self.store: OptionsStore | None = None
         self.known_device_ips: list[str] = []
         self.overlap: dict[str, OverlapReport] = {}
@@ -133,6 +141,14 @@ class Daemon:
         self._tasks: list[asyncio.Task[None]] = []
         self._background: set[asyncio.Task[None]] = set()
         self._options_lock = asyncio.Lock()
+        # Taken by everything that moves or deletes clip files: shipping, retention,
+        # deletes, and the clip mover (per clip). Never held across an await.
+        self.files_lock = threading.Lock()
+        self.migration = Migration()
+        # Hotspot joins asked for from the panel; Home Assistant (the integration) does them.
+        self.joins: dict[str, dict[str, Any]] = {}
+        # Wi-Fi scans asked of Home Assistant: the app's role may not scan itself.
+        self.scans: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._runners: list[web.AppRunner] = []
         self._options_mtime = 0.0
         self._stop = asyncio.Event()
@@ -180,6 +196,8 @@ class Daemon:
         )
         self.post.start()
         self._build_storage()
+        with contextlib.suppress(OSError):
+            self.store_.clean_leftovers()
         self._resume_post_processing()
         await self.network.refresh()
         self._sync_workers()
@@ -207,8 +225,16 @@ class Daemon:
         resumed = 0
         for target in (TARGET_LOCAL, "spool"):
             for clip, copy in self.cat.copies_for_target(target):
-                if clip.post_status == "pending" and copy.path and Path(copy.path).exists():
-                    self.post.submit(clip.id, Path(copy.path))
+                if clip.post_status != "pending" or not copy.path:
+                    continue
+                path = Path(copy.path)
+                remuxed = path.with_suffix(".mp4")
+                if not path.exists() and path.suffix.lower() == ".ts" and remuxed.exists():
+                    # Older versions deleted the original before recording the remux.
+                    self.cat.add_copy(clip.id, copy.target, str(remuxed), remuxed.stat().st_size)
+                    path = remuxed
+                if path.exists():
+                    self.post.submit(clip.id, path)
                     resumed += 1
         if resumed:
             _LOGGER.info("Resuming post-processing of %d clip(s)", resumed)
@@ -230,6 +256,11 @@ class Daemon:
     async def stop(self) -> None:
         """Graceful stop: every camera is restored before the app exits."""
         self._stop.set()
+        # A clip move stops after the clip in hand; an interrupted one resumes next time.
+        self.migration.cancel()
+        moving = [t for t in self._background if not t.done()]
+        if moving:
+            await asyncio.wait(moving, timeout=5)
         for task in self._tasks:
             task.cancel()
         for task in self._tasks:
@@ -256,15 +287,36 @@ class Daemon:
     def request_stop(self) -> None:
         self._stop.set()
 
+    def _configured_token(self) -> str:
+        """A token the owner typed into the app configuration, for manual integration setup."""
+        try:
+            raw = json.loads((self.config.options_path or Path()).read_text("utf-8"))
+        except (OSError, ValueError):
+            return ""
+        token = raw.get("api_token") if isinstance(raw, dict) else None
+        if not isinstance(token, str) or not token.strip():
+            return ""
+        token = token.strip()
+        if len(token) < MIN_TOKEN_LENGTH:
+            _LOGGER.warning(
+                "Ignoring api_token: it needs at least %d characters. Using a generated one.",
+                MIN_TOKEN_LENGTH,
+            )
+            return ""
+        _LOGGER.info("Using the API token from the app configuration")
+        return token
+
     def _load_token(self) -> str:
         if self.config.api_token:
             return self.config.api_token
+        if configured := self._configured_token():
+            return configured
         path = self.config.data_dir / "api_token"
         try:
             token = path.read_text("utf-8").strip()
         except FileNotFoundError:
             token = ""
-        if len(token) < 32:
+        if len(token) < MIN_TOKEN_LENGTH:
             token = secrets.token_urlsafe(32)
             path.write_text(token, "utf-8")
             path.chmod(0o600)
@@ -290,12 +342,22 @@ class Daemon:
         try:
             data = await self.supervisor._request("GET", "/addons/self/info")
             host = (data or {}).get("hostname") or host
+            # The installed version (a local build carries a timestamp): shown in the
+            # panel so it is plain which build is running.
+            installed = (data or {}).get("version")
+            if isinstance(installed, str) and installed:
+                self.installed_version = installed
         except SupervisorError:
             pass
         try:
             self.discovery_uuid = await self.supervisor.post_discovery(
                 "dashcam_sync",
                 {"host": host, "port": self.config.api_port, "token": self.token},
+            )
+            _LOGGER.info(
+                "Offered to Home Assistant through Supervisor discovery (%s:%d)",
+                host,
+                self.config.api_port,
             )
         except SupervisorError as err:
             _LOGGER.warning("Discovery failed (manual setup still works): %s", err)
@@ -342,6 +404,9 @@ class Daemon:
         )
 
     def _build_storage(self) -> None:
+        if self.migration.running:
+            # The destination just changed: the running move is aimed at the old one.
+            self.migration.cancel()
         self.storage = StorageManager(
             self.cat,
             self.options.storage,
@@ -354,9 +419,20 @@ class Daemon:
         self._revalidate()
 
     async def _options_loop(self) -> None:
+        last_sync = 0.0
         while True:
             await asyncio.sleep(OPTIONS_POLL)
             try:
+                store = self.store
+                if (
+                    isinstance(store, SupervisorOptionsStore)
+                    and time.monotonic() - last_sync >= OPTIONS_SYNC
+                ):
+                    # Configuration-tab edits only reach the Supervisor, not the file.
+                    last_sync = time.monotonic()
+                    async with self._options_lock:
+                        with contextlib.suppress(SupervisorError):
+                            await store.sync()
                 if await self._load_options():
                     self._build_storage()
                     self._sync_workers()
@@ -444,7 +520,8 @@ class Daemon:
     def _ship_safely(self) -> None:
         try:
             if self.storage is not None:
-                self.storage.ship_pending()
+                with self.files_lock:
+                    self.storage.ship_pending()
         except OSError as err:
             _LOGGER.warning("Shipping to the network target failed: %s", err)
         except Exception:  # never let one bad copy stop shipping for good
@@ -456,7 +533,13 @@ class Daemon:
 
     async def run_purge(self, *, dry_run: bool) -> PurgeReport:
         assert self.retention is not None
-        report = await asyncio.to_thread(self.retention.run, dry_run=dry_run)
+        retention = self.retention
+
+        def purge() -> PurgeReport:
+            with self.files_lock:
+                return retention.run(dry_run=dry_run)
+
+        report = await asyncio.to_thread(purge)
         if not dry_run:
             self.last_purge = {"ts": time.time(), **report.as_dict()}
             self.last_purge.pop("clips", None)
@@ -464,6 +547,140 @@ class Daemon:
                 "purge_completed", count=len(report.deleted), bytes_freed=report.bytes_freed
             )
         return report
+
+    async def delete_clip(self, clip_id: int) -> int:
+        """Delete a clip everywhere (the delete action), between other file work."""
+        retention = self.retention
+        assert retention is not None
+
+        def delete() -> int:
+            with self.files_lock:
+                return retention.delete_clip_everywhere(clip_id)
+
+        return await asyncio.to_thread(delete)
+
+    # ------------------------------------------------------------ Wi-Fi join
+
+    def join_profile(self, cam: CameraOptions) -> dict[str, Any]:
+        """The Wi-Fi profile Home Assistant needs for a hotspot camera (no password)."""
+        out: dict[str, Any] = {
+            "interface": cam.interface,
+            "ssid": cam.ssid,
+            "ipv4": cam.effective_ipv4,
+            "gateway": None,
+            "dns": None,
+            "mode": "block",
+            "ipv6": "disabled",
+        }
+        try:
+            block = self.block_for(cam)
+        except ConfigError:
+            return out
+        out.update(
+            address=block.static_address,
+            block=str(block.network),
+            camera=str(block.camera),
+            gateway=block.gateway,
+            mode=block.mode,
+        )
+        return out
+
+    def request_join(self, cam: CameraOptions) -> dict[str, Any]:
+        """Ask Home Assistant to join a camera hotspot; it answers with ``set_join_result``."""
+        state: dict[str, Any]
+        if self.bus.subscribers == 0:
+            state = {"state": "manual", "reason": "integration_not_connected"}
+        else:
+            state = {"state": "requested", "reason": None}
+            self.bus.publish("join_wifi", camera=cam.id)
+        self.joins[cam.id] = {**state, "ts": time.time()}
+        return self.join_status(cam)
+
+    async def scan_via_home_assistant(self, interface: str) -> dict[str, Any]:
+        """Ask the integration to scan (Home Assistant may; this app's role may not)."""
+        if self.bus.subscribers == 0:
+            return {"error": "integration_not_connected"}
+        request = secrets.token_hex(6)
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self.scans[request] = future
+        self.bus.publish("scan_wifi", interface=interface, request=request)
+        try:
+            return await asyncio.wait_for(future, SCAN_TIMEOUT)
+        except TimeoutError:
+            return {"error": "no_answer"}
+        finally:
+            self.scans.pop(request, None)
+
+    def set_scan_result(self, request: str, result: dict[str, Any]) -> bool:
+        future = self.scans.get(request)
+        if future is None or future.done():
+            return False
+        future.set_result(result)
+        return True
+
+    def set_join_result(self, camera_id: str, state: str, reason: str | None) -> None:
+        self.joins[camera_id] = {"state": state, "reason": reason, "ts": time.time()}
+
+    def join_status(self, cam: CameraOptions) -> dict[str, Any]:
+        join = dict(self.joins.get(cam.id) or {"state": "idle", "reason": None, "ts": None})
+        if join["state"] == "requested" and time.time() - (join["ts"] or 0) > JOIN_TIMEOUT:
+            join = {"state": "manual", "reason": "no_answer", "ts": join["ts"]}
+            self.joins[cam.id] = join
+        worker = self.workers.get(cam.id)
+        iface = self.network.interface(cam.interface) if cam.interface else None
+        return {
+            **join,
+            "camera_connected": bool(worker and worker.status.connected),
+            "interface": (
+                {"enabled": iface.enabled, "connected": iface.connected, "ssid": iface.ssid}
+                if iface is not None
+                else None
+            ),
+            "profile": self.join_profile(cam),
+        }
+
+    # ----------------------------------------------------------- moving clips
+
+    async def migration_plan(self) -> MigrationPlan:
+        return await asyncio.to_thread(plan_migration, self.cat, self.store_)
+
+    def migration_payload(self, plan: MigrationPlan | None = None) -> dict[str, Any]:
+        return {
+            "plan": plan.as_dict() if plan is not None else None,
+            "job": self.migration.state.as_dict(),
+        }
+
+    async def start_migration(self) -> MigrationPlan:
+        """Start moving clips to where the current settings put them.
+
+        Raises ``ValueError`` with a short reason when there is nothing to do or the move
+        cannot start (already running, destination offline).
+        """
+        if self.migration.running:
+            raise ValueError("already_running")
+        plan = await self.migration_plan()
+        if not plan.moves:
+            raise ValueError("nothing_to_move")
+        if plan.blocked:
+            raise ValueError(plan.blocked)
+        loop = asyncio.get_running_loop()
+        storage = self.store_
+
+        def progress(state: Any) -> None:  # called from the worker thread
+            loop.call_soon_threadsafe(lambda: self.bus.publish("migration", **state.as_dict()))
+
+        self.migration.begin(plan)
+        self.bus.publish("migration", **self.migration.state.as_dict())
+
+        async def run() -> None:
+            await asyncio.to_thread(
+                self.migration.run, self.cat, storage, self.files_lock, progress
+            )
+
+        task = asyncio.create_task(run())
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
+        return plan
 
     # ------------------------------------------------------------- background
 
@@ -534,7 +751,13 @@ class Daemon:
         if not ip:
             raise ConfigError("the camera's address is not known yet")
         if cam.static_address:
-            return block_from_static(cam.static_address, ip)
+            return block_from_static(
+                cam.static_address,
+                ip,
+                force_point_to_point=cam.effective_addressing == "point_to_point",
+            )
+        if cam.effective_addressing == "point_to_point":
+            raise ConfigError("run the network check to pick Home Assistant's address")
         return compute_block(ip)
 
     async def run_overlap_check(
@@ -551,22 +774,52 @@ class Daemon:
             raise ConfigError("the address-block check only applies to hotspot cameras")
         if known_device_ips is not None:
             self.known_device_ips = known_device_ips
-        block = self.block_for(cam)
+        ip = self.camera_ip(cam)
+        if not ip:
+            raise ConfigError("the camera's address is not known yet")
         exclude = {c.interface for c in self.options.cameras if c.interface}
         homes = self.network.home_networks({i for i in exclude if i})
         joined = bool(self.network.link_matches(cam))
-        report = await check_overlap(
-            block,
+        report = await choose_block(
+            ip,
             homes,
+            addressing=cam.effective_addressing,
+            # While joined, keep what is applied: the probe would only hit the camera.
+            static_address=cam.static_address,
             known_device_ips=self.known_device_ips,
             probe=tcp_probe if (probe and not joined) else None,
         )
+        await self._remember_address(cam, report)
         previous = self.overlap.get(camera_id)
         self.overlap[camera_id] = report
         self.overlap_checked[camera_id] = time.time()
         if previous is None or previous.result != report.result:
             self.bus.publish("overlap", camera=camera_id, report=report.as_dict())
         return report
+
+    async def _remember_address(self, cam: CameraOptions, report: OverlapReport) -> None:
+        """Store the address ``choose_block`` picked, so the join applies exactly it.
+
+        Only in ``auto`` and only for a free pick; a user's fixed address is never
+        rewritten.
+        """
+        picked = report.block.static_address
+        fixed = cam.effective_addressing != "auto" and cam.static_address
+        if fixed or report.blocked or picked == cam.static_address:
+            return
+        if cam.effective_addressing == "block" and not cam.static_address:
+            return  # computed the same way every time: nothing to remember
+
+        def mutate(raw: dict[str, Any]) -> None:
+            for entry in raw.get("cameras", []):
+                if entry.get("id") == cam.id:
+                    entry["static_address"] = picked
+
+        _LOGGER.info(
+            "%s: Home Assistant's address on the camera network is now %s (%s)",
+            cam.id, picked, report.block.mode,
+        )  # fmt: skip
+        await self.update_raw_options(mutate)
 
     async def _retention_loop(self) -> None:
         while True:
@@ -692,12 +945,13 @@ class Daemon:
             if TARGET_NETWORK in health
             else None,
             "last_purge": self.last_purge,
+            "migration": self.migration.state.as_dict(),
         }
 
     def status_payload(self) -> dict[str, Any]:
         return {
             "api_version": API_VERSION,
-            "app_version": __version__,
+            "app_version": self.installed_version,
             "uptime": round(time.time() - self._started),
             "cameras": {cid: w.status.as_dict() for cid, w in self.workers.items()},
             "storage": self.storage_payload(),
@@ -717,12 +971,16 @@ class Daemon:
         """Read-modify-write the raw options; the file watcher applies them."""
         assert self.store is not None
         async with self._options_lock:  # concurrent edits must not overwrite each other
+            if isinstance(self.store, SupervisorOptionsStore):
+                # Start from the Supervisor's copy: a Configuration-tab edit may not have
+                # reached the file yet, and must not be overwritten.
+                with contextlib.suppress(SupervisorError):
+                    await self.store.sync()
             raw = json.loads(json.dumps(await self.store.read() or self.raw_options))
             mutate(raw)
             await self.store.write(raw)
-            # Apply immediately instead of waiting for the poll.
-            if isinstance(self.store, FileOptionsStore):
-                self._options_mtime = 0.0
+            # Apply now, whatever the file's timestamp says.
+            self._options_mtime = 0.0
             await self._load_options()
             self._build_storage()
             self._sync_workers()

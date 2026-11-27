@@ -19,6 +19,19 @@ class ProtocolError(CameraError):
     """The camera answered, but not in a way the driver understands."""
 
 
+class NothingBeyond(ProtocolError):
+    """HTTP 416: the camera has no bytes at or after the requested offset."""
+
+    def __init__(self, message: str, total: int | None = None) -> None:
+        super().__init__(message)
+        # The file's size when the 416 states it (Content-Range: bytes */N).
+        self.total = total
+
+
+class Incomplete(CameraError):
+    """A download ended cleanly but short of the expected size; the partial file is kept."""
+
+
 class UnsupportedCamera(DashcamError):
     """No driver claimed the camera."""
 

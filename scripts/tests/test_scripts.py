@@ -11,6 +11,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS))
 
+import check_ha_api as ha_api
 import check_hardware_gate as gate
 import check_versions as versions
 
@@ -123,3 +124,152 @@ def test_the_endpoints_listed_are_the_ones_the_app_calls() -> None:
 def test_ci_runs_on_main_and_pull_requests() -> None:
     ci = (SCRIPTS.parent / ".github/workflows/ci.yml").read_text()
     assert "push:\n    branches: [main]" in ci and "pull_request:" in ci
+
+
+def _fake_ha(tmp_path: Path) -> Path:
+    """A tiny stand-in for the homeassistant package, using Python 3.14's bare ``except A, B``."""
+    pkg = tmp_path / "ha" / "homeassistant" / "helpers"
+    pkg.mkdir(parents=True)
+    (pkg.parent / "__init__.py").write_text("")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "target.py").write_text(
+        "from os import path as re_exported\n"
+        "class TargetSelection: ...\n"
+        "def async_extract_referenced_entity_ids(): ...\n"
+        "LIMIT = 3\n"
+        "def risky():\n"
+        "    try:\n"
+        "        pass\n"
+        "    except KeyError, ValueError:\n"
+        "        pass\n"
+    )
+    (pkg / "service.py").write_text("def extract_entity_ids(): ...\n")
+    (pkg / "entity_registry.py").write_text("")
+    return tmp_path / "ha"
+
+
+def _integration(tmp_path: Path, imports: str) -> Path:
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "mod.py").write_text(imports)
+    return src
+
+
+def test_ha_api_check_accepts_names_that_exist(tmp_path: Path) -> None:
+    src = _integration(
+        tmp_path,
+        "from homeassistant.helpers.target import TargetSelection, LIMIT, re_exported\n"
+        "from homeassistant.helpers import entity_registry as er\n"  # a submodule
+        "from homeassistant.helpers.service import extract_entity_ids\n",
+    )
+    assert ha_api.missing_imports(_fake_ha(tmp_path), [src]) == []
+
+
+def test_ha_api_check_finds_a_name_that_was_removed(tmp_path: Path) -> None:
+    src = _integration(
+        tmp_path,
+        "from homeassistant.helpers.service import async_extract_referenced_entity_ids\n"
+        "from homeassistant.helpers.target import TargetSelection\n",
+    )
+    [problem] = ha_api.missing_imports(_fake_ha(tmp_path), [src])
+    assert (
+        "homeassistant.helpers.service has no async_extract_referenced_entity_ids"
+        in problem
+    )
+    assert problem.endswith("mod.py:1: " + problem.split(": ", 1)[1])
+
+
+def test_ha_api_check_finds_a_module_that_was_removed(tmp_path: Path) -> None:
+    src = _integration(tmp_path, "from homeassistant.helpers.gone import thing\n")
+    [problem] = ha_api.missing_imports(_fake_ha(tmp_path), [src])
+    assert "no module homeassistant.helpers.gone" in problem
+
+
+def test_ha_api_check_ignores_everything_that_is_not_homeassistant(
+    tmp_path: Path,
+) -> None:
+    src = _integration(
+        tmp_path, "from os import nothing_here\nfrom .local import x\nimport json\n"
+    )
+    assert ha_api.missing_imports(_fake_ha(tmp_path), [src]) == []
+
+
+def test_the_minimum_ha_version_comes_from_hacs_json() -> None:
+    assert re.fullmatch(r"\d{4}\.\d{1,2}\.\d+", ha_api.minimum_version())
+
+
+def test_install_on_ha_copies_both_parts_and_bumps_the_version(tmp_path: Path) -> None:
+    """Runs the real script with a fake wget that serves this checkout as the tarball."""
+    import os
+    import subprocess
+    import tarfile
+
+    root = SCRIPTS.parent
+    tarball = tmp_path / "src.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tar:
+        for part in ("app/dashcam_sync", "integration/custom_components/dashcam_sync"):
+            tar.add(root / part, arcname=f"ha-dashcam-sync-x/{part}")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "wget").write_text(f"#!/bin/sh\ncat {tarball}\n")
+    (bin_dir / "wget").chmod(0o755)
+    apps, config = tmp_path / "local_apps", tmp_path / "config"
+    apps.mkdir()
+    config.mkdir()
+    (config / "configuration.yaml").write_text("")
+    env = {
+        "PATH": f"{bin_dir}:/usr/bin:/bin",
+        "DASHCAM_APPS_DIR": str(apps),
+        "DASHCAM_CONFIG_DIR": str(config),
+    }
+    run = subprocess.run(
+        ["sh", str(SCRIPTS / "install-on-ha.sh"), "some-branch"],
+        env=env, capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert run.returncode == 0, run.stderr
+    cfg = (apps / "dashcam_sync" / "config.yaml").read_text()
+    assert "\nimage:" not in cfg
+    version = re.search(r'^version: "(\d{4})\.(\d+)\.(\d{12})"$', cfg, re.MULTILINE)
+    assert version, cfg[:300]
+    assert (config / "custom_components" / "dashcam_sync" / "manifest.json").exists()
+    assert "Check for updates" in run.stdout  # no `ha` command here: the manual steps
+    assert os.access(SCRIPTS / "install-on-ha.sh", os.X_OK)
+
+    # A second install right away (same second) must still count as newer, or the
+    # Supervisor would not rebuild the changed source.
+    again = subprocess.run(
+        ["sh", str(SCRIPTS / "install-on-ha.sh"), "some-branch"],
+        env=env, capture_output=True, text=True, check=False,
+    )  # fmt: skip
+    assert again.returncode == 0, again.stderr
+    cfg2 = (apps / "dashcam_sync" / "config.yaml").read_text()
+    version2 = re.search(r'^version: "\d{4}\.\d+\.(\d{12})"$', cfg2, re.MULTILINE)
+    assert version2 and int(version2[1]) > int(version[3])
+    assert not list(apps.glob(".dashcam_sync.*"))  # no staging or backup left behind
+
+
+def test_ha_api_check_does_not_count_names_inside_functions_or_classes(
+    tmp_path: Path,
+) -> None:
+    ha = _fake_ha(tmp_path)
+    (ha / "homeassistant" / "helpers" / "nested.py").write_text(
+        "class Example:\n"
+        "    def removed_helper(self): ...\n"
+        "def outer():\n"
+        "    local_only = 1\n"
+        "try:\n"
+        "    from x import guarded\n"
+        "except ImportError:\n"
+        "    guarded = None\n"
+        "if True:\n"
+        "    conditional = 1\n"
+    )
+    src = _integration(
+        tmp_path,
+        "from homeassistant.helpers.nested import Example, guarded, conditional\n"
+        "from homeassistant.helpers.nested import removed_helper, local_only\n",
+    )
+    problems = ha_api.missing_imports(ha, [src])
+    assert len(problems) == 2
+    assert any("no removed_helper" in p for p in problems)
+    assert any("no local_only" in p for p in problems)

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import ipaddress
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import voluptuous as vol
 from homeassistant.core import HomeAssistant
 
 from custom_components.dashcam_sync import wifi
@@ -36,7 +36,38 @@ def supervisor() -> MagicMock:
         )
     )
     client.network.update_interface = AsyncMock()
+    # What update_interface does inside: POST the model's dict. The profile goes
+    # through here, checked against the Supervisor's own schema (below).
+    client.network._client.post = AsyncMock()
     return client
+
+
+# The Supervisor's schema for POST /network/interface/<name>/update
+# (supervisor/api/network.py, SCHEMA_UPDATE): it rejects unknown keys.
+SUPERVISOR_UPDATE = vol.Schema(
+    {
+        vol.Optional("ipv4"): {
+            vol.Optional("address"): [str],
+            vol.Optional("method"): vol.In(["disabled", "static", "auto"]),
+            vol.Optional("gateway"): str,
+            vol.Optional("nameservers"): [str],
+        },
+        vol.Optional("ipv6"): dict,
+        vol.Optional("wifi"): {
+            vol.Optional("mode"): vol.In(["infrastructure", "mesh", "adhoc", "ap"]),
+            vol.Optional("auth"): vol.In(["open", "wep", "wpa-psk"]),
+            vol.Optional("ssid"): str,
+            vol.Optional("psk"): str,
+        },
+        vol.Optional("enabled"): bool,
+    }
+)
+
+
+def posted(client: MagicMock) -> tuple[str, dict]:
+    """The request the Supervisor received, validated the way it validates it."""
+    call = client.network._client.post.call_args
+    return call.args[0], SUPERVISOR_UPDATE(call.kwargs["json"])
 
 
 @pytest.fixture
@@ -67,7 +98,7 @@ def test_profile_from_api() -> None:
         and PROFILE.block == "192.168.1.252/30"
     )
     assert PROFILE.as_placeholders() == {
-        "interface": "wlan0", "ssid": "CAM", "address": "192.168.1.253", "prefix": "30", "block": "192.168.1.252/30",
+        "interface": "wlan0", "ssid": "CAM", "address": "192.168.1.253", "prefix": "30", "block": "192.168.1.252/30", "gateway": "empty",
     }  # fmt: skip
     assert (
         wifi.profile_from_api(
@@ -106,30 +137,63 @@ async def test_lists_only_wireless_interfaces(hass: HomeAssistant, hassio: Magic
         await wifi.async_list_wifi_interfaces(hass)
 
 
+async def test_apply_profile_point_to_point_names_the_camera_as_gateway(
+    hass: HomeAssistant, hassio: MagicMock
+) -> None:
+    profile = wifi.profile_from_api(
+        {"interface": "wlan0", "ssid": "P2DC", "password": "pw123456",
+         "static_address": "192.168.0.254/32", "gateway": "192.168.0.1"}
+    )  # fmt: skip
+    assert profile.as_placeholders()["gateway"] == "192.168.0.1"
+    await wifi.async_apply_profile(hass, profile)
+    _, body = posted(hassio)
+    assert body["ipv4"]["address"] == ["192.168.0.254/32"]
+    assert body["ipv4"]["gateway"] == "192.168.0.1"
+    assert body["ipv4"]["nameservers"] == []  # name resolution stays on Ethernet
+    assert PROFILE.as_placeholders()["gateway"] == "empty"
+
+
 async def test_apply_profile_writes_the_small_block_without_gateway_or_dns(
     hass: HomeAssistant, hassio: MagicMock
 ) -> None:
     await wifi.async_apply_profile(hass, PROFILE)
-    interface, config = hassio.network.update_interface.call_args.args
-    assert interface == "wlan0" and config.enabled is True
-    assert config.wifi.ssid == "CAM" and config.wifi.psk == "pw123456"
-    assert config.wifi.mode.value == "infrastructure" and config.wifi.method.value == "wpa-psk"
-    assert config.ipv4.method.value == "static"
-    assert config.ipv4.address == [ipaddress.IPv4Interface("192.168.1.253/30")]
-    assert (
-        config.ipv4.gateway is None and config.ipv4.nameservers == []
-    )  # default route stays on Ethernet
-    assert config.ipv6.method.value == "disabled"
+    path, body = posted(hassio)  # a key the Supervisor does not know fails here
+    assert path == "network/interface/wlan0/update" and body["enabled"] is True
+    assert body["wifi"] == {
+        "mode": "infrastructure", "auth": "wpa-psk", "ssid": "CAM", "psk": "pw123456"
+    }  # fmt: skip
+    assert body["ipv4"]["method"] == "static"
+    assert body["ipv4"]["address"] == ["192.168.1.253/30"]
+    assert "gateway" not in body["ipv4"] or body["ipv4"]["gateway"] is None
+    assert body["ipv4"]["nameservers"] == []  # default route stays on Ethernet
+    assert body["ipv6"]["method"] == "disabled"
 
     open_profile = wifi.profile_from_api(
         {"interface": "wlan0", "ssid": "OPEN", "static_address": "10.0.0.2/30"}
     )
     await wifi.async_apply_profile(hass, open_profile)
-    assert hassio.network.update_interface.call_args.args[1].wifi.method.value == "open"
+    assert posted(hassio)[1]["wifi"]["auth"] == "open"
 
-    hassio.network.update_interface.side_effect = RuntimeError("denied")
+    hassio.network._client.post.side_effect = RuntimeError("denied")
     with pytest.raises(WifiUnavailable):
         await wifi.async_apply_profile(hass, PROFILE)
+
+
+async def test_the_library_model_alone_would_be_refused(hass: HomeAssistant) -> None:
+    """Why the profile is not sent with update_interface: its dict says ``method``."""
+    from aiohasupervisor.models.network import AuthMethod, NetworkInterfaceConfig, WifiConfig
+
+    raw = NetworkInterfaceConfig(wifi=WifiConfig(method=AuthMethod.WPA_PSK, ssid="X")).to_dict()
+    with pytest.raises(vol.Invalid):
+        SUPERVISOR_UPDATE(raw)
+
+
+async def test_without_client_internals_the_library_call_is_used(
+    hass: HomeAssistant, hassio: MagicMock
+) -> None:
+    hassio.network._client = None
+    await wifi.async_apply_profile(hass, PROFILE)
+    assert hassio.network.update_interface.await_args.args[0] == "wlan0"
 
 
 async def test_disconnect(hass: HomeAssistant, hassio: MagicMock) -> None:
