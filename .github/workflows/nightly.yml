@@ -19,8 +19,8 @@ jobs:
       matrix:
         channel: [beta, dev]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libturbojpeg0
@@ -40,8 +40,8 @@ jobs:
     name: App with the newest dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
@@ -55,8 +55,8 @@ jobs:
     name: Property-based tests, 3000 examples each
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - run: pip install -e "app[dev]"
@@ -67,8 +67,8 @@ jobs:
     name: Integration imports exist in the newest Home Assistant
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - run: python scripts/check_ha_api.py latest
@@ -77,8 +77,8 @@ jobs:
     name: The default role still reaches what the app uses
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
       - run: python scripts/check_supervisor_roles.py
