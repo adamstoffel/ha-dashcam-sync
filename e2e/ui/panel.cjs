@@ -203,11 +203,16 @@ async function waitFor(fn, what, timeout = 30000) {
     await page.click("#w-next");
     await page.fill("#w-name", "Hotspot cam");
     await page.click("#w-next");
-    await page.waitForSelector("#w-connect table.kv", { timeout: 8000 }).catch(async (e) => {
+    // Joining goes through the integration, so with none connected the wizard stops and
+    // says so, instead of asking Home Assistant and waiting for an answer that never comes.
+    await page.waitForSelector("#w-recheck", { timeout: 8000 }).catch(async (e) => {
       throw new Error(e.message + "\nwizard shows: " + (await page.locator("#wizard").innerText()));
     });
+    assert.match(await page.locator("#w-connect .notice.bad").innerText(), /integration is not connected/);
+    assert.equal(await page.locator("#w-anyway").count(), 0, "nothing to continue to without an integration");
+    await page.click("#w-connect details summary");  // the by-hand steps stay one click away
+    await page.waitForSelector("#w-connect table.kv", { state: "visible" });
     const manualText = await page.locator("#w-connect").innerText();
-    assert.match(manualText, /integration is not connected/);
     assert.match(manualText, /CARDV-1234/);
     assert.match(manualText, /Static · \d+\.\d+\.\d+\.\d+\/30/);
     assert.ok(!/secret-pass/.test(manualText), "the password is never shown");
@@ -228,7 +233,7 @@ async function waitFor(fn, what, timeout = 30000) {
     await page.fill("#w-ssid", "CARDV-5678");
     await page.click("#w-next");
     await page.click("#w-next");
-    await page.waitForSelector("#w-connect table.kv");
+    await page.waitForSelector("#w-recheck");  // saved; the join step is reached
     await page.click("dialog#wizard .dlg-close");
     const stored = await page.evaluate(async () => (await (await fetch("api/v1/cameras/hotspot_cam")).json()).options);
     assert.equal(stored.ssid, "CARDV-5678");

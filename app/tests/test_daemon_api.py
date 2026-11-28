@@ -1078,6 +1078,50 @@ async def test_an_unanswered_join_request_turns_manual(
     assert now["state"] == "manual" and now["reason"] == "no_answer"
 
 
+async def test_a_join_that_stays_connecting_turns_manual(
+    stack: Stack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The integration says it is connecting, then never gives a final answer."""
+    await _hotspot(stack)
+    stack.daemon.bus.subscribe()
+    await stack.post("/api/v1/cameras/hot/join")
+    status, _ = await stack.post("/api/v1/cameras/hot/join-result", {"state": "connecting"})
+    assert status == 200
+    _, now = await stack.get("/api/v1/cameras/hot/join")
+    assert now["state"] == "connecting"
+    monkeypatch.setattr(daemon_mod, "JOIN_CONNECT_TIMEOUT", -1)
+    _, now = await stack.get("/api/v1/cameras/hot/join")
+    assert now["state"] == "manual" and now["reason"] == "no_answer"
+
+
+async def test_the_panel_can_tell_whether_the_integration_is_paired(stack: Stack) -> None:
+    """Connected or not, and the same release or not: the panel warns on either."""
+    from dashcam_sync import __version__
+
+    _, info = await stack.get("/api/v1/info")
+    assert info["release"] == __version__ and isinstance(info["uptime"], int)
+    assert info["integration"] == {
+        "connected": False, "version": None, "app_release": __version__, "matches": False,
+    }  # fmt: skip
+    header = "X-Dashcam-Sync-Integration"
+    for sent, matches in ((__version__, True), ("2026.1.0", False), (None, False)):
+        headers = {**stack.h(), **({header: sent} if sent else {})}
+        async with stack.http.ws_connect(f"{stack.api}/api/v1/ws", headers=headers) as ws:
+            await ws.receive_json()  # the snapshot: the socket is registered by now
+            _, info = await stack.get("/api/v1/info")
+            assert info["integration"]["connected"] is True
+            assert info["integration"]["version"] == sent
+            assert info["integration"]["matches"] is matches
+            _, status = await stack.get("/api/v1/status")
+            assert status["integration"] == info["integration"]
+        for _ in range(100):  # the server notices the close a moment later
+            _, info = await stack.get("/api/v1/info")
+            if not info["integration"]["connected"]:
+                break
+            await asyncio.sleep(0.01)
+        assert info["integration"]["connected"] is False
+
+
 async def test_join_results_are_refused_on_the_ingress_port(stack: Stack) -> None:
     await _hotspot(stack)
     async with stack.http.post(

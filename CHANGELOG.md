@@ -2,6 +2,11 @@
 
 All notable changes to the integration and the app. Both are released together with the same CalVer version (`YYYY.M.patch`).
 
+## 2026.11.0b2
+
+- Fixed: a camera with a wrong Wi-Fi password looked like it was still being joined ("Waiting for the camera to answer…"). The Supervisor takes a profile before the host tries it, so the integration now waits for the interface to come up on the camera's network before reporting it joined. If it does not, it scans: the network in range means the password is wrong, otherwise the camera is out of range. The wizard says which, and offers **Change the password** or **Check the SSID**.
+- The panel shows a warning on every page when the Dashcam Sync integration is not connected, or is a different release from the app, and the wizard will not ask Home Assistant to join a camera's Wi-Fi until it is (the by-hand steps stay one click away, and it carries on by itself once fixed). The integration sends its release with every request, and raises a repair issue when the app is a different release.
+
 ## 2026.11.0b1 (first public beta)
 
 The first public release, as a beta: tested end to end in CI and on one real camera (see the README's *What has and has not been verified*). It includes everything below, down to the initial build.

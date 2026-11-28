@@ -7,7 +7,7 @@ from typing import Any
 
 import aiohttp
 
-from .const import REQUEST_TIMEOUT
+from .const import INTEGRATION_HEADER, REQUEST_TIMEOUT
 
 
 class DashcamSyncError(Exception):
@@ -46,16 +46,29 @@ def _as_list(body: Any) -> list[dict[str, Any]]:
 class DashcamSyncApi:
     """Thin async wrapper; every call raises one of the errors above."""
 
-    def __init__(self, session: aiohttp.ClientSession, host: str, port: int, token: str) -> None:
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        host: str,
+        port: int,
+        token: str,
+        integration_version: str | None = None,
+    ) -> None:
         self._session = session
         self.host = host
         self.port = port
         self._token = token
+        self._integration_version = integration_version
         self._base = f"http://{host}:{port}/api/v1"
 
     @property
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._token}"}
+        headers = {"Authorization": f"Bearer {self._token}"}
+        if self._integration_version:
+            # The app shows in its panel whether this integration is connected, and
+            # whether it is the same release.
+            headers[INTEGRATION_HEADER] = self._integration_version
+        return headers
 
     async def _request(
         self, method: str, path: str, *, json: Any = None, params: dict[str, Any] | None = None

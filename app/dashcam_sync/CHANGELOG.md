@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.11.0b2
+
+- A wrong Wi-Fi password is reported as such ("Home Assistant sees the camera's Wi-Fi but could not connect to it"), and an out-of-range camera too, instead of waiting for the camera forever.
+- A warning on every page when the integration is missing or a different release, and the wizard waits for it before joining a camera's Wi-Fi.
+
 ## 2026.11.0b1
 
 First public beta.

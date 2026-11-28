@@ -350,6 +350,10 @@
       "title": "App and integration versions do not match",
       "description": "The app speaks API version {app_api} and this integration speaks {integration_api}. Update the app and the integration to the same release."
     },
+    "release_mismatch": {
+      "title": "Dashcam Sync app and integration are different releases",
+      "description": "The app is {app_release} and the integration is {integration_release}. They are released together, and some features (joining a camera's Wi-Fi, for one) need both to be the same release. Update the integration in HACS and the app under Settings > Apps to the same release, then restart Home Assistant."
+    },
     "announced_wifi_adapter": {
       "title": "Home Assistant announces itself on the Wi-Fi adapter",
       "description": "The adapter(s) {adapters} are enabled under Settings > System > Network > Network adapter. Turn them off so Home Assistant does not announce itself on the dashcam's network."

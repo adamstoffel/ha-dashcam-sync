@@ -31,6 +31,9 @@ from .profile import capture_profile
 from .storage import attached_storage
 from .supervisor import SupervisorError
 
+# The header the integration sends its release in (the integration's const.py has the same).
+INTEGRATION_HEADER = "X-Dashcam-Sync-Integration"
+
 if TYPE_CHECKING:
     from .daemon import Daemon
 
@@ -134,6 +137,9 @@ async def info(request: web.Request) -> web.Response:
         {
             "api_version": API_VERSION,
             "app_version": d.installed_version,
+            "release": __version__,
+            "uptime": d.uptime(),
+            "integration": d.integration_payload(),
             "name": "Dashcam Sync",
             "instance": d.instance_id,
             "cameras": len(d.workers),
@@ -150,6 +156,8 @@ async def websocket(request: web.Request) -> web.StreamResponse:
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
     request.app[SOCKETS].add(ws)
+    # Only the integration opens this socket; it says which release it is.
+    d.integration_links[id(ws)] = request.headers.get(INTEGRATION_HEADER, "")[:40] or None
     queue = d.bus.subscribe()
     await ws.send_json({"type": "snapshot", **await d.status_with_rev()})
 
@@ -170,6 +178,7 @@ async def websocket(request: web.Request) -> web.StreamResponse:
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await task
         d.bus.unsubscribe(queue)
+        d.integration_links.pop(id(ws), None)
         request.app[SOCKETS].discard(ws)
     return ws
 
@@ -738,7 +747,7 @@ async def wizard_storage_test(request: web.Request) -> web.Response:
     )
 
 
-JOIN_STATES = ("joined", "failed", "manual")
+JOIN_STATES = ("connecting", "joined", "failed", "manual")
 
 
 async def wizard_interfaces(request: web.Request) -> web.Response:

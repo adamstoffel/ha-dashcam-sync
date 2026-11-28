@@ -8,8 +8,10 @@ under Settings, System, Network) instead of breaking.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +20,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.hassio import is_hassio
 
 _LOGGER = logging.getLogger(__name__)
+
+# How long a join may take to come up before it counts as failed. NetworkManager gives up
+# on a wrong passphrase after about ten seconds; a good one connects well inside this.
+JOIN_VERIFY_TIMEOUT = 45.0
+JOIN_VERIFY_POLL = 3.0
 
 
 class WifiUnavailable(HomeAssistantError):
@@ -80,9 +87,20 @@ def _client(hass: HomeAssistant) -> Any:
     return get_supervisor_client(hass)
 
 
-async def async_list_wifi_interfaces(hass: HomeAssistant) -> list[WifiInterface]:
-    """Wireless interfaces the host has (empty means no usable adapter)."""
+async def async_list_wifi_interfaces(
+    hass: HomeAssistant, *, reload: bool = False
+) -> list[WifiInterface]:
+    """Wireless interfaces the host has (empty means no usable adapter).
+
+    ``reload`` first asks the Supervisor to re-read the host network, so a connection that
+    just came up (or failed) shows at once.
+    """
     client = _client(hass)
+    if reload:
+        try:
+            await client.network.reload()
+        except Exception as err:  # the cached state is still worth reading
+            _LOGGER.debug("Network reload failed: %s", err)
     try:
         info = await client.network.info()
     except Exception as err:
@@ -272,4 +290,43 @@ async def async_join_camera(
         await async_apply_profile(hass, profile)
     except WifiUnavailable as err:
         return "manual", str(err)
-    return "joined", None
+    try:
+        await api.async_join_result(camera_id, "connecting", None)
+    except Exception:  # an older app has no "connecting" state; the final answer still counts
+        _LOGGER.debug("The app did not take the connecting state for %s", camera_id)
+    return await async_verify_join(hass, profile)
+
+
+async def async_verify_join(
+    hass: HomeAssistant,
+    profile: WifiProfile,
+    *,
+    wait: float = JOIN_VERIFY_TIMEOUT,
+    poll: float = JOIN_VERIFY_POLL,
+) -> tuple[str, str | None]:
+    """Wait for the interface to come up on the camera's network, and say why if it does not.
+
+    The Supervisor accepts a profile before NetworkManager tries it, so an accepted profile
+    is not a joined network. A wrong passphrase only shows as the interface never
+    connecting while the camera's network is in range, so that is what is checked.
+    """
+    deadline = time.monotonic() + wait
+    while True:
+        await asyncio.sleep(poll)
+        try:
+            for iface in await async_list_wifi_interfaces(hass, reload=True):
+                if (
+                    iface.name == profile.interface
+                    and iface.connected
+                    and iface.ssid == profile.ssid
+                ):
+                    return "joined", None
+        except WifiUnavailable as err:
+            _LOGGER.debug("Could not read the interface state: %s", err)
+        if time.monotonic() >= deadline:
+            break
+    try:
+        visible = {ap.get("ssid") for ap in await async_scan_access_points(hass, profile.interface)}
+    except WifiUnavailable:
+        return "failed", "not_connected"
+    return "failed", "wrong_password" if profile.ssid in visible else "not_in_range"

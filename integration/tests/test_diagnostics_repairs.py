@@ -20,7 +20,7 @@ from custom_components.dashcam_sync.issues import issue_id
 from custom_components.dashcam_sync.repairs import DashcamSyncFixFlow, async_create_fix_flow
 from custom_components.dashcam_sync.wifi import WifiUnavailable
 
-from .conftest import FakeApi, setup_entry
+from .conftest import RELEASE, FakeApi, setup_entry
 
 ISSUES = [
     {"key": "camera_playback_mode", "camera": "family_car", "placeholders": {}},
@@ -123,6 +123,28 @@ async def test_api_version_mismatch_and_announced_adapter_issues(
     await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert registry.async_get_issue(DOMAIN, "api_mismatch") is None  # cleaned up on unload
+
+
+@pytest.mark.parametrize(
+    ("app_release", "shown"),
+    [("2026.11.0b1", "2026.11.0b1"), (None, "older than 2026.11.0b2")],
+)
+async def test_a_different_app_release_is_a_repair_issue(
+    hass: HomeAssistant,
+    fake_api: FakeApi,
+    entry: MockConfigEntry,
+    app_release: str | None,
+    shown: str,
+) -> None:
+    """An app from another release (or one too old to say) is the usual cause of a join
+    request nobody answers: say so where Home Assistant shows problems."""
+    fake_api.info["release"] = app_release
+    await setup_entry(hass, entry)
+    issue = ir.async_get(hass).async_get_issue(DOMAIN, "release_mismatch")
+    assert issue is not None and issue.translation_placeholders == {
+        "app_release": shown,
+        "integration_release": RELEASE,
+    }
 
 
 async def test_own_issues_are_cleared_when_fixed(

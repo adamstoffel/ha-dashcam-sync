@@ -236,3 +236,59 @@ async def test_known_device_ips(hass: HomeAssistant) -> None:
     MockConfigEntry(domain="other", data={"host": "192.168.1.200"}).add_to_hass(hass)
     MockConfigEntry(domain="dashcam_sync", data={"host": "192.168.1.9"}).add_to_hass(hass)
     assert wifi.known_device_ips(hass) == ["10.0.0.7", "192.168.1.200", "192.168.1.55"]
+
+
+def wifi_state(connected: bool, ssid: str | None) -> list:
+    return [wifi.WifiInterface("wlan0", connected=connected, enabled=True, ssid=ssid)]
+
+
+@pytest.mark.parametrize(
+    ("interfaces", "visible", "expected"),
+    [
+        # The interface comes up on the camera's network.
+        (wifi_state(True, "CAM"), [], ("joined", None)),
+        # It never does, while the camera's network is in range: the passphrase.
+        (
+            wifi_state(False, "CAM"),
+            [{"ssid": "CAM"}, {"ssid": "HOME"}],
+            ("failed", "wrong_password"),
+        ),
+        # It never does, and the network is not there at all.
+        (wifi_state(False, None), [{"ssid": "HOME"}], ("failed", "not_in_range")),
+        # Up, but on another network, is not joined either.
+        (wifi_state(True, "HOME"), [{"ssid": "CAM"}], ("failed", "wrong_password")),
+    ],
+)
+async def test_a_join_is_checked_not_assumed(
+    hass: HomeAssistant, interfaces: list, visible: list, expected: tuple
+) -> None:
+    """The Supervisor takes a profile with a wrong passphrase; only the link shows it."""
+    listing = AsyncMock(return_value=interfaces)
+    with (
+        patch.object(wifi, "async_list_wifi_interfaces", listing),
+        patch.object(wifi, "async_scan_access_points", AsyncMock(return_value=visible)),
+    ):
+        assert await wifi.async_verify_join(hass, PROFILE, wait=0.05, poll=0.01) == expected
+    assert listing.await_args.kwargs == {"reload": True}  # fresh state, not the cached one
+
+
+async def test_a_join_check_without_a_scan_still_answers(hass: HomeAssistant) -> None:
+    with (
+        patch.object(
+            wifi, "async_list_wifi_interfaces", AsyncMock(side_effect=WifiUnavailable("x"))
+        ),
+        patch.object(wifi, "async_scan_access_points", AsyncMock(side_effect=WifiUnavailable("x"))),
+    ):
+        assert await wifi.async_verify_join(hass, PROFILE, wait=0.02, poll=0.01) == (
+            "failed",
+            "not_connected",
+        )
+
+
+async def test_reload_reads_the_host_network_again(hass: HomeAssistant, hassio: MagicMock) -> None:
+    hassio.network.reload = AsyncMock(side_effect=RuntimeError("busy"))
+    assert [i.name for i in await wifi.async_list_wifi_interfaces(hass, reload=True)] == [
+        "wlan0",
+        "wlan1",
+    ]
+    hassio.network.reload.assert_awaited_once()  # and a failed reload still reads the state

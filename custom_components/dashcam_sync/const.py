@@ -45,6 +45,10 @@ CLIP_ROOTS: Final = ("/media", "/share")
 ISSUE_API_MISMATCH: Final = "api_mismatch"
 ISSUE_ANNOUNCED_ADAPTER: Final = "announced_wifi_adapter"
 ISSUE_APP_UNREACHABLE: Final = "app_unreachable"
+ISSUE_RELEASE_MISMATCH: Final = "release_mismatch"
+
+# Sent with every request so the app can tell which integration release is talking to it.
+INTEGRATION_HEADER: Final = "X-Dashcam-Sync-Integration"
 
 ATTR_CLIP_ID: Final = "clip_id"
 ATTR_MEDIA_CONTENT_ID: Final = "media_content_id"

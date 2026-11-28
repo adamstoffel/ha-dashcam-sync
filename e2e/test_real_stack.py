@@ -80,6 +80,13 @@ async def test_camera_to_entities(hass: HomeAssistant, stack: Stack) -> None:
     assert hass.states.get("camera.family_car_live") is not None
     event = hass.states.get("sensor.family_car_last_event_clip")
     assert event.state.startswith("2026-11-22T")  # the RO/ clip is an event
+    # The real integration tells the real app which release it is: a matched pair, so the
+    # panel shows no pairing warning and Home Assistant raises no release repair.
+    pairing = stack.daemon.integration_payload()
+    assert pairing["connected"] and pairing["matches"], pairing
+    from homeassistant.helpers import issue_registry as ir
+
+    assert ir.async_get(hass).async_get_issue("dashcam_sync", "release_mismatch") is None
 
 
 async def test_media_browser_resolves_real_clips(
@@ -282,17 +289,32 @@ async def test_the_panel_asks_home_assistant_to_join_a_hotspot(
     cam = stack.daemon.options.camera("hot")
     assert cam is not None
     apply = AsyncMock()
-    adapters = [WifiInterface("wlan0", False, True, None)]
+
+    def adapters(*_args: object, **_kw: object) -> list[WifiInterface]:
+        # The link comes up once the profile is applied: the integration checks for that.
+        up = apply.await_count > 0
+        return [WifiInterface("wlan0", up, True, "CARDV" if up else None)]
+
     W = "custom_components.dashcam_sync.wifi"
+    seen: list[str] = []
+    record = stack.daemon.set_join_result
+
+    def recording(camera_id: str, state: str, reason: str | None) -> None:
+        seen.append(state)
+        record(camera_id, state, reason)
 
     async def ask() -> dict:
         assert stack.daemon.request_join(cam)["state"] == "requested"  # type: ignore[arg-type]
-        await wait_for(hass, lambda: stack.daemon.joins["hot"]["state"] != "requested")
+        await wait_for(
+            hass, lambda: stack.daemon.joins["hot"]["state"] not in ("requested", "connecting")
+        )
         return stack.daemon.joins["hot"]
 
     with (
-        patch(f"{W}.async_list_wifi_interfaces", return_value=adapters),
+        patch(f"{W}.async_list_wifi_interfaces", side_effect=adapters),
         patch(f"{W}.async_apply_profile", apply),
+        patch(f"{W}.JOIN_VERIFY_POLL", 0.05),
+        patch.object(stack.daemon, "set_join_result", recording),
     ):
         # The real address check: 127.0.0.1 collides with this machine, so no join.
         refused = await ask()
@@ -309,6 +331,7 @@ async def test_the_panel_asks_home_assistant_to_join_a_hotspot(
         with patch.object(stack.daemon, "run_overlap_check", free):
             joined = await ask()
     assert joined["state"] == "joined", joined
+    assert seen[-2:] == ["connecting", "joined"]  # the panel shows the link coming up
     profile = apply.await_args.args[1]
     assert profile.ssid == "CARDV" and profile.password == "pw" and profile.prefix == 30
 

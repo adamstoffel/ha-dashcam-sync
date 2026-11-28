@@ -3,7 +3,7 @@
 The app serves a small JSON API for the integration (and for you, if you want to script it). Base URL: `http://<app host>:8100/api/v1`. The same routes are served to the ingress panel on port 8099, where Home Assistant has already authenticated you and the Supervisor's ingress proxy is the only client allowed.
 
 - **Authentication.** Every route except `GET /healthz` needs `Authorization: Bearer <token>`. The token is generated on first start, stored in `/data`, and handed to Core only through Supervisor discovery, unless you set the app's optional **Integration token** yourself (at least 32 characters) to add the integration by hand. Credentials (`/cameras/<id>/wifi`) are never served on the ingress port.
-- **Versioning.** `GET /info` returns `api_version` (currently `1`). The integration raises a repair issue if the two sides are incompatible.
+- **Versioning.** `GET /info` returns `api_version` (currently `1`) and `release` (the app's version). The integration sends its own release in the `X-Dashcam-Sync-Integration` header, and raises a repair issue if the API versions are incompatible or the releases differ.
 - **Errors.** Failures are `{"error": "<message>"}` with a 4xx or 5xx status.
 - **Hostile input.** The wizard endpoints that take a host refuse public, loopback and Home Assistant-internal addresses.
 
@@ -12,7 +12,7 @@ The app serves a small JSON API for the integration (and for you, if you want to
 | Method and path | Purpose |
 | --- | --- |
 | `GET /healthz` | Liveness for the Supervisor watchdog. No token. |
-| `GET /info` | `api_version`, `app_version`, `instance` (a stable random id that survives token changes), camera count. |
+| `GET /info` | `api_version`, `app_version` (as installed), `release` (the code's version), `uptime`, `integration` (`connected`, `version`, `app_release`, `matches`: whether the integration is on the push socket and the same release), `instance` (a stable random id that survives token changes), camera count. `GET /status` carries the same `integration` object. |
 | `GET /status` | Everything at once: `cameras` (by id), `storage`, `issues`, `network`, `overlap`, and `rev` (see below). |
 | `GET /ws` | WebSocket. Sends a `snapshot` (same shape as `/status`) on connect, then pushes events. Send the text `snapshot` to request another. |
 
@@ -82,7 +82,7 @@ Push messages (`{"type": ..., "ts": ..., "rev": ...}`):
 | `GET /wizard/interfaces` | Wi-Fi interfaces Home Assistant reports (`name`, `enabled`, `connected`, `ssid`, `signal`, `in_use_by`), for choosing a hotspot camera's adapter. |
 | `POST /cameras/{id}/join` | Ask Home Assistant to join this hotspot camera's Wi-Fi. Sends a `join_wifi` push to the integration; if none is connected the answer is `manual` straight away. |
 | `GET /cameras/{id}/join` | Join progress: `state` (`idle`, `requested`, `joined`, `failed`, `manual`), `reason`, `camera_connected`, and `profile`: the exact values for Settings › System › Network (no password). A request with no answer within 45 s turns `manual`. |
-| `POST /cameras/{id}/join-result` | The integration reports the outcome (`state`, `reason`). Token port only. |
+| `POST /cameras/{id}/join-result` | The integration reports the outcome (`state`, `reason`). `connecting` once the Supervisor took the profile; then `joined` only when the interface is up on the camera's network, or `failed` with `wrong_password` (the network is in range but the link never came up), `not_in_range`, or another reason. Token port only. |
 | `GET /wizard/storage-test` | Mount health of the configured targets. |
 | `POST /wizard/camera` | Validate and save a camera entry (computes `static_address` for hotspot cameras). |
 | `POST /wizard/capture-profile` | A redacted, read-only profile of an unsupported camera. |

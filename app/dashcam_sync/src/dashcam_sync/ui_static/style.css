@@ -34,6 +34,8 @@ nav a { flex: 0 0 auto; padding: 12px 14px; color: var(--fg2); text-decoration: 
 nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
 nav a:hover { color: var(--fg); }
 main { max-width: 1040px; margin: 0 auto; padding: 16px 16px 96px; }
+#pairing { max-width: 1040px; margin: 0 auto; padding: 16px 16px 0; }
+#pairing .card { margin: 0; }
 footer { max-width: 1040px; margin: 0 auto; padding: 0 16px 24px; color: var(--fg2); font-size: 12px; }
 
 /* --------------------------------------------------------------------- layout */
