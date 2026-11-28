@@ -159,7 +159,7 @@ async def websocket(request: web.Request) -> web.StreamResponse:
     # On the token port this is the integration, and it says which release it is. The
     # ingress port serves the same feed to the panel's browser: that is not an integration.
     if request.app[SECRETS]:
-        d.integration_links[id(ws)] = request.headers.get(INTEGRATION_HEADER, "")[:40] or None
+        d.link_integration(id(ws), request.headers.get(INTEGRATION_HEADER, "")[:40] or None)
     queue = d.bus.subscribe()
     task: asyncio.Task[None] | None = None
 
@@ -184,7 +184,7 @@ async def websocket(request: web.Request) -> web.StreamResponse:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         d.bus.unsubscribe(queue)
-        d.integration_links.pop(id(ws), None)
+        d.unlink_integration(id(ws))
         request.app[SOCKETS].discard(ws)
     return ws
 

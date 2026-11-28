@@ -1051,7 +1051,7 @@ async def test_a_join_request_reaches_the_integration_and_its_answer_is_shown(
 ) -> None:
     await _hotspot(stack)
     events = stack.daemon.bus.subscribe()  # stands in for the integration's socket
-    stack.daemon.integration_links[0] = None  # an integration is on the token port
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
     _, join = await stack.post("/api/v1/cameras/hot/join")
     assert join["state"] == "requested"
     sent = [events.get_nowait() for _ in range(events.qsize())]
@@ -1073,7 +1073,7 @@ async def test_an_unanswered_join_request_turns_manual(
 ) -> None:
     await _hotspot(stack)
     stack.daemon.bus.subscribe()
-    stack.daemon.integration_links[0] = None  # an integration is on the token port
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
     await stack.post("/api/v1/cameras/hot/join")
     monkeypatch.setattr(daemon_mod, "JOIN_TIMEOUT", -1)
     _, now = await stack.get("/api/v1/cameras/hot/join")
@@ -1086,7 +1086,7 @@ async def test_a_join_that_stays_connecting_turns_manual(
     """The integration says it is connecting, then never gives a final answer."""
     await _hotspot(stack)
     stack.daemon.bus.subscribe()
-    stack.daemon.integration_links[0] = None  # an integration is on the token port
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
     await stack.post("/api/v1/cameras/hot/join")
     status, _ = await stack.post("/api/v1/cameras/hot/join-result", {"state": "connecting"})
     assert status == 200
@@ -1333,7 +1333,7 @@ async def test_a_scan_without_the_integration_says_why(stack: Stack) -> None:
 
 async def test_a_scan_is_answered_through_home_assistant(stack: Stack) -> None:
     events = stack.daemon.bus.subscribe()  # stands in for the integration's socket
-    stack.daemon.integration_links[0] = None  # an integration is on the token port
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
 
     async def integration() -> None:
         while True:
@@ -1368,7 +1368,7 @@ async def test_an_unanswered_scan_times_out_cleanly(
     stack: Stack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     stack.daemon.bus.subscribe()
-    stack.daemon.integration_links[0] = None  # an integration is on the token port
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
     monkeypatch.setattr(daemon_mod, "SCAN_TIMEOUT", 0.1)
     _, r = await stack.get("/api/v1/wizard/wifi-scan?interface=wlp4s0")
     assert r["available"] is False and r["reason"] == "no_answer"
@@ -1388,7 +1388,7 @@ async def test_scan_results_are_only_accepted_from_home_assistant(stack: Stack) 
 
 async def test_a_refused_scan_from_home_assistant_is_reported(stack: Stack) -> None:
     events = stack.daemon.bus.subscribe()
-    stack.daemon.integration_links[0] = None  # an integration is on the token port
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
 
     async def integration() -> None:
         while (event := await events.get())["type"] != "scan_wifi":

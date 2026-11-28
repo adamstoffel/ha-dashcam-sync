@@ -150,7 +150,8 @@ class Daemon:
         # Hotspot joins asked for from the panel; Home Assistant (the integration) does them.
         self.joins: dict[str, dict[str, Any]] = {}
         # Integrations on the push socket: socket id -> the release each one sent (None
-        # for one too old to say).
+        # for one too old to say). Replaced, never changed in place: the status is built
+        # on a worker thread, which must never see the dict change while it reads it.
         self.integration_links: dict[int, str | None] = {}
         # Wi-Fi scans asked of Home Assistant: the app's role may not scan itself.
         self.scans: dict[str, asyncio.Future[dict[str, Any]]] = {}
@@ -959,10 +960,17 @@ class Daemon:
     def uptime(self) -> int:
         return round(time.time() - self._started)
 
+    def link_integration(self, key: int, version: str | None) -> None:
+        self.integration_links = {**self.integration_links, key: version}
+
+    def unlink_integration(self, key: int) -> None:
+        self.integration_links = {k: v for k, v in self.integration_links.items() if k != key}
+
     def integration_payload(self) -> dict[str, Any]:
         """Whether the Dashcam Sync integration is connected, and if it is the same release."""
-        connected = bool(self.integration_links)
-        version = next((v for v in self.integration_links.values() if v), None)
+        links = self.integration_links  # one read: the loop may swap in a new dict meanwhile
+        connected = bool(links)
+        version = next((v for v in links.values() if v), None)
         return {
             "connected": connected,
             "version": version,
