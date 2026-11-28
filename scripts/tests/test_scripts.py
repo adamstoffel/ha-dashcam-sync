@@ -170,6 +170,9 @@ def test_a_version_bump_on_main_releases_itself() -> None:
     # The app store sees the new version only after the images and the release exist.
     assert "needs: github-release" in release and "--set-store" in release
     assert "secrets.RELEASE_DEPLOY_KEY" in release and "git push origin HEAD:main" in release
+    # A called workflow gets only the secrets passed to it.
+    assert "secrets:\n      RELEASE_DEPLOY_KEY:\n        required: false" in release
+    assert "RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}" in auto
     assert "cancel-in-progress: ${{ !inputs.release }}" in ci
 
 

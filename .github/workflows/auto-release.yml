@@ -64,6 +64,8 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.plan.outputs.tag }}
+    secrets:
+      RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
     permissions:
       contents: write
       packages: write

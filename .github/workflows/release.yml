@@ -13,6 +13,10 @@ on:
         description: "The release tag, e.g. v2026.11.0b2"
         required: true
         type: string
+    # A called workflow sees only the secrets its caller passes: the store job needs this one.
+    secrets:
+      RELEASE_DEPLOY_KEY:
+        required: false
 
 # One run per tag at a time: a tag pushed by hand while the automatic run for the same
 # version is going waits for it, then stops at the gate below instead of publishing twice.
