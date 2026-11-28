@@ -25,6 +25,14 @@ _LOGGER = logging.getLogger(__name__)
 # on a wrong passphrase after about ten seconds; a good one connects well inside this.
 JOIN_VERIFY_TIMEOUT = 45.0
 JOIN_VERIFY_POLL = 3.0
+# NetworkManager has given up when the interface is neither connected nor activating
+# this long after the profile went in; no need to wait out JOIN_VERIFY_TIMEOUT then.
+JOIN_GAVE_UP_AFTER = 9.0
+# A weak link loses handshake frames, and many dashcams then drop the client as if
+# its password were wrong. A later try often gets through: try this many times, waiting
+# out wpa_supplicant's 10 to 20 s block of the access point in between.
+JOIN_ATTEMPTS = 3
+JOIN_RETRY_DELAY = 22.0
 
 
 class WifiUnavailable(HomeAssistantError):
@@ -302,18 +310,36 @@ async def async_join_camera(
         return "manual", str(err)
     if profile.interface not in {a.name for a in adapters}:
         return "failed", f"no_adapter: {profile.interface}"
-    try:
-        await async_apply_profile(hass, profile)
-    except WifiLinkFailed:
-        # The profile was fine and the link failed: say why, as when it fails later.
-        return await async_why_not_joined(hass, profile)
-    except WifiUnavailable as err:
-        return "manual", str(err)
+    result: tuple[str, str | None] = ("failed", "not_connected")
+    for attempt in range(1, JOIN_ATTEMPTS + 1):
+        try:
+            await async_apply_profile(hass, profile)
+        except WifiLinkFailed:
+            # The profile was fine and the link failed: say why, as when it fails later.
+            await _report_connecting(api, camera_id)
+            result = await async_why_not_joined(hass, profile)
+        except WifiUnavailable as err:
+            return "manual", str(err)
+        else:
+            await _report_connecting(api, camera_id)
+            result = await async_verify_join(hass, profile)
+        # Only a camera that is there and turned us away is worth another try.
+        if result != ("failed", "wrong_password") or attempt == JOIN_ATTEMPTS:
+            return result
+        _LOGGER.info(
+            "The camera refused Home Assistant on %s (try %d of %d); trying again",
+            profile.ssid, attempt, JOIN_ATTEMPTS,
+        )  # fmt: skip
+        await asyncio.sleep(JOIN_RETRY_DELAY)
+    return result
+
+
+async def _report_connecting(api: Any, camera_id: str) -> None:
+    """The profile is in: tell the app, which also restarts its wait for an answer."""
     try:
         await api.async_join_result(camera_id, "connecting", None)
     except Exception:  # an older app has no "connecting" state; the final answer still counts
         _LOGGER.debug("The app did not take the connecting state for %s", camera_id)
-    return await async_verify_join(hass, profile)
 
 
 async def async_verify_join(
@@ -322,6 +348,7 @@ async def async_verify_join(
     *,
     wait: float = JOIN_VERIFY_TIMEOUT,
     poll: float = JOIN_VERIFY_POLL,
+    gave_up_after: float = JOIN_GAVE_UP_AFTER,
 ) -> tuple[str, str | None]:
     """Wait for the interface to come up on the camera's network, and say why if it does not.
 
@@ -329,21 +356,22 @@ async def async_verify_join(
     is not a joined network. A wrong passphrase only shows as the interface never
     connecting while the camera's network is in range, so that is what is checked.
     """
-    deadline = time.monotonic() + wait
+    started = time.monotonic()
+    deadline = started + wait
     while True:
         await asyncio.sleep(poll)
+        gave_up = False
         try:
             for iface in await async_list_wifi_interfaces(hass, reload=True):
-                if (
-                    iface.name == profile.interface
-                    and iface.ready  # up with its address, not still authenticating
-                    and iface.connected
-                    and iface.ssid == profile.ssid
-                ):
-                    return "joined", None
+                if iface.name != profile.interface:
+                    continue
+                if iface.ready and iface.connected and iface.ssid == profile.ssid:
+                    return "joined", None  # up with its address, not still authenticating
+                # Neither up nor still trying (connected covers activating): it failed.
+                gave_up = not iface.connected and time.monotonic() - started >= gave_up_after
         except WifiUnavailable as err:
             _LOGGER.debug("Could not read the interface state: %s", err)
-        if time.monotonic() >= deadline:
+        if gave_up or time.monotonic() >= deadline:
             break
     return await async_why_not_joined(hass, profile)
 

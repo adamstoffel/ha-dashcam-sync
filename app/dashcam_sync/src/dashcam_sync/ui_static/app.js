@@ -281,7 +281,7 @@ const SCAN_REASONS = {
 const JOIN_REASONS = {
   integration_not_connected: "The Dashcam Sync integration is not connected to this app, so Home Assistant cannot be asked to join.",
   no_answer: "Home Assistant did not answer the join request. If the integration was just updated, restart Home Assistant.",
-  wrong_password: "Home Assistant sees the camera's Wi-Fi but the camera refused it. Either the Wi-Fi password is wrong, or another device (a phone with the camera's app, say) is connected to the camera: many dashcams take one at a time, and refuse the next as if its password were wrong. Disconnect the other device and try again.",
+  wrong_password: "Home Assistant sees the camera's Wi-Fi, but the camera refused it three times. The usual causes: a weak signal at Home Assistant's Wi-Fi adapter (the camera drops a client whose handshake is slow, as if its password were wrong; park closer, or use a USB adapter with an antenna), another device connected to the camera (many take one at a time), or a wrong password.",
   not_in_range: "Home Assistant cannot see the camera's Wi-Fi. Is the camera on, and the car within range? Check the SSID too.",
   not_connected: "Home Assistant could not connect to the camera's Wi-Fi.",
   device_in_block: "A device on your network uses an address in the camera's reserved block. Run Network check on the camera for details.",
