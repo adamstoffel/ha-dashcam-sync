@@ -132,6 +132,10 @@ def test_a_version_bump_on_main_releases_itself() -> None:
     auto, release = (wf / "auto-release.yml").read_text(), (wf / "release.yml").read_text()
     assert "push:\n    branches: [main]" in auto
     assert "git ls-remote --exit-code --tags origin" in auto  # an existing tag: nothing to do
+    assert '[ "$status" -ne 2 ]' in auto  # a failed lookup stops; only "no such tag" goes on
+    assert "concurrency:" not in auto  # one pending run per group would drop a version
+    assert "group: release-${{ inputs.tag || github.ref_name }}" in release
+    assert "is already released" in release and "already points at another commit" in release
     assert "check_versions.py" in auto and "check_hardware_gate.py" in auto
     assert "uses: ./.github/workflows/release.yml" in auto and "tag: ${{ needs.plan.outputs.tag }}" in auto
     assert 'tags: ["v*"]' in release and "workflow_call:" in release  # by hand or called

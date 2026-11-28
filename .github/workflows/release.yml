@@ -14,6 +14,12 @@ on:
         required: true
         type: string
 
+# One run per tag at a time: a tag pushed by hand while the automatic run for the same
+# version is going waits for it, then stops at the gate below instead of publishing twice.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   packages: write
@@ -33,6 +39,21 @@ jobs:
           python-version: "3.13"
       - run: python scripts/check_versions.py "$TAG"
       - run: python scripts/check_hardware_gate.py "$TAG"
+      - name: Not already published, and the tag (if any) is on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Another run got here first: publishing again would overwrite or mix its artifacts.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::$TAG is already released."; exit 1
+          fi
+          # An annotated tag lists its commit as <tag>^{}; a lightweight one as the tag itself.
+          peeled="$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)"
+          plain="$(git ls-remote origin "refs/tags/$TAG" | cut -f1)"
+          tagged="${peeled:-$plain}"
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG already points at another commit ($tagged)."; exit 1
+          fi
 
   ci:
     needs: gates
