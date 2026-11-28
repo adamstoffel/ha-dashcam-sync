@@ -102,8 +102,9 @@ function confirmDialog(title, text, okLabel = "OK", danger = false) {
   return new Promise((resolve) => {
     const d = openDialog(title, { small: true, id: "confirm" });
     let answer = false;
-    d.body.innerHTML = `<div>${text}</div><div class="actions end"><button class="text" id="c-no">Cancel</button>
+    d.body.innerHTML = `<div class="c-text"></div><div class="actions end"><button class="text" id="c-no">Cancel</button>
       <button class="${danger ? "primary danger-fill" : "primary"}" id="c-yes">${esc(okLabel)}</button></div>`;
+    $(".c-text", d.body).textContent = text;  // plain text: never parsed as HTML
     if (danger) $("#c-yes", d.dlg).style.background = $("#c-yes", d.dlg).style.borderColor = "var(--bad)";
     $("#c-no", d.dlg).onclick = d.close;
     $("#c-yes", d.dlg).onclick = () => { answer = true; d.close(); };
