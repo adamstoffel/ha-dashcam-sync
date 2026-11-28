@@ -43,10 +43,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -o pipefail  # a failed lookup below must stop here, not read as "none"
           # Another run got here first: publishing again would overwrite or mix its artifacts.
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          # Only a 404 means "not released"; any other lookup failure stops the release.
+          if out="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>&1)"; then
             echo "::error::$TAG is already released."; exit 1
           fi
+          case "$out" in
+            *"HTTP 404"*) ;;
+            *) echo "::error::Could not check whether $TAG is released: $out"; exit 1 ;;
+          esac
           # An annotated tag lists its commit as <tag>^{}; a lightweight one as the tag itself.
           peeled="$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)"
           plain="$(git ls-remote origin "refs/tags/$TAG" | cut -f1)"

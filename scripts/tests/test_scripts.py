@@ -156,6 +156,7 @@ def test_a_version_bump_on_main_releases_itself() -> None:
     assert "concurrency:" not in auto  # one pending run per group would drop a version
     assert "group: release-${{ inputs.tag || github.ref_name }}" in release
     assert "is already released" in release and "already points at another commit" in release
+    assert '*"HTTP 404"*) ;;' in release  # only "no such release" goes on; other failures stop
     assert "check_versions.py" in auto and "check_hardware_gate.py" in auto
     assert "uses: ./.github/workflows/release.yml" in auto and "tag: ${{ needs.plan.outputs.tag }}" in auto
     assert 'tags: ["v*"]' in release and "workflow_call:" in release  # by hand or called
