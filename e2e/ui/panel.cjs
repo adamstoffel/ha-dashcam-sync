@@ -197,6 +197,13 @@ async function waitFor(fn, what, timeout = 30000) {
     assert.equal(await page.locator("#w-err .notice.bad").count(), 0, "not shown as an error");
     await page.fill("#w-ssid", "CARDV-1234");
     await page.fill("#w-pass", "secret-pass");
+    // The password can be shown while typing, and hidden again.
+    assert.equal(await page.locator("#w-pass").getAttribute("type"), "password");
+    await page.click("#w-pass-show");
+    assert.equal(await page.locator("#w-pass").getAttribute("type"), "text");
+    assert.equal(await page.locator("#w-pass-show").getAttribute("aria-pressed"), "true");
+    await page.click("#w-pass-show");
+    assert.equal(await page.locator("#w-pass").getAttribute("type"), "password");
     assert.equal(await page.locator("#w-camip").inputValue(), "192.168.1.254", "the usual camera IP is preselected");
     await page.selectOption("#w-camip", "other");
     await page.fill("#w-camip-other", "127.0.0.1:9");  // a closed port: nothing answers there

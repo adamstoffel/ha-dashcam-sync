@@ -29,6 +29,26 @@ def test_versions_agree_with_the_current_tag() -> None:
     assert versions.check(f"v{current}") == []
 
 
+def test_the_app_store_version_lags_but_never_leads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """config.yaml moves only when a release has published its images."""
+    release = next(iter(set(versions.collect().values())))
+    config = tmp_path / "config.yaml"
+    config.write_text('name: x\nversion: "2026.1.0"\nslug: y\n')
+    monkeypatch.setattr(versions, "CONFIG", config)
+    assert versions.check(None) == []  # behind the release version: fine
+    assert versions.check(f"v{release}") == []  # and at release time too
+    assert versions.set_store(release) is True
+    assert 'version: "' + release + '"' in config.read_text() and "slug: y" in config.read_text()
+    assert versions.set_store(release) is False  # already offered
+    assert versions.set_store("2026.1.0") is False  # never moves back
+    config.write_text('version: "2099.1.0"\n')
+    assert any("ahead of the release version" in p for p in versions.check(None))
+
+
+def test_a_beta_sorts_before_its_release() -> None:
+    assert versions.order("2026.11.0b2") < versions.order("2026.11.0") < versions.order("2026.11.1b1")
+
+
 def test_versions_reject_a_mismatched_tag() -> None:
     problems = versions.check("v1999.1.0")
     assert problems and all("tag is 1999.1.0" in p for p in problems)
@@ -124,6 +144,36 @@ def test_the_endpoints_listed_are_the_ones_the_app_calls() -> None:
 def test_ci_runs_on_main_and_pull_requests() -> None:
     ci = (SCRIPTS.parent / ".github/workflows/ci.yml").read_text()
     assert "push:\n    branches: [main]" in ci and "pull_request:" in ci
+
+
+def test_a_version_bump_on_main_releases_itself() -> None:
+    """auto-release.yml decides; release.yml does the work, for a tag or when called."""
+    wf = SCRIPTS.parent / ".github/workflows"
+    auto, release = (wf / "auto-release.yml").read_text(), (wf / "release.yml").read_text()
+    assert "push:\n    branches: [main]" in auto
+    assert "git ls-remote --exit-code --tags origin" in auto  # an existing tag: nothing to do
+    assert '[ "$status" -ne 2 ]' in auto  # a failed lookup stops; only "no such tag" goes on
+    assert "concurrency:" not in auto  # one pending run per group would drop a version
+    assert "group: release-${{ inputs.tag || github.ref_name }}" in release
+    assert "is already released" in release and "already points at another commit" in release
+    assert '*"HTTP 404"*) ;;' in release  # only "no such release" goes on; other failures stop
+    assert "check_versions.py" in auto and "check_hardware_gate.py" in auto
+    assert "uses: ./.github/workflows/release.yml" in auto and "tag: ${{ needs.plan.outputs.tag }}" in auto
+    assert 'tags: ["v*"]' in release and "workflow_call:" in release  # by hand or called
+    assert "TAG: ${{ inputs.tag || github.ref_name }}" in release
+    assert "tag_name: ${{ env.TAG }}" in release  # the release creates the tag last
+    assert "github.ref_name" not in release.replace("inputs.tag || github.ref_name", "")
+    assert "if: github.ref == 'refs/heads/main'" in auto  # a manual run elsewhere does nothing
+    # A release's CI is never cancelled by a later push to main.
+    ci = (wf / "ci.yml").read_text()
+    assert "with:\n      release: true" in release
+    # The app store sees the new version only after the images and the release exist.
+    assert "needs: github-release" in release and "--set-store" in release
+    assert "secrets.RELEASE_DEPLOY_KEY" in release and "git push origin HEAD:main" in release
+    # A called workflow gets only the secrets passed to it.
+    assert "secrets:\n      RELEASE_DEPLOY_KEY:\n        required: false" in release
+    assert "RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}" in auto
+    assert "cancel-in-progress: ${{ !inputs.release }}" in ci
 
 
 def _fake_ha(tmp_path: Path) -> Path:

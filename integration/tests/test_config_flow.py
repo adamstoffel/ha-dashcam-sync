@@ -121,6 +121,62 @@ async def test_hassio_discovery_bad_payload_and_unreachable(
     assert result["type"] is FlowResultType.ABORT and result["reason"] == "cannot_connect"
 
 
+async def test_a_reinstalled_app_replaces_its_old_discovery_card(
+    hass: HomeAssistant, fake_api: FakeApi
+) -> None:
+    """Two cards for one app: the earlier install's token is gone, so only the new stays."""
+    old = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_HASSIO}, data=discovery(token="old")
+    )
+    assert old["step_id"] == "hassio_confirm"
+    fake_api.info["instance"] = "inst-reinstalled"  # a reinstall is a new instance
+    new = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_HASSIO}, data=discovery(token="new")
+    )
+    assert new["step_id"] == "hassio_confirm"
+    left = hass.config_entries.flow.async_progress_by_handler(DOMAIN)
+    assert [f["flow_id"] for f in left] == [new["flow_id"]]
+
+    # Another app (another slug) keeps its own card.
+    other = HassioServiceInfo(
+        config={"host": "h2", "port": 8100, "token": "t"}, name="x", slug="other_app", uuid="u2"
+    )
+    fake_api.info["instance"] = "inst-other"
+    await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_HASSIO}, data=other
+    )
+    assert len(hass.config_entries.flow.async_progress_by_handler(DOMAIN)) == 2
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ("token_gone", "discovery_outdated"),
+        ("other_instance", "discovery_outdated"),
+        ("app_down", "cannot_connect"),  # not outdated: the app is just not answering
+        ("other_api", "incompatible_api"),
+    ],
+)
+async def test_an_outdated_card_creates_no_entry(
+    hass: HomeAssistant, fake_api: FakeApi, change: str, reason: str
+) -> None:
+    """Confirming checks the app again: an entry that cannot connect is never created."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_HASSIO}, data=discovery()
+    )
+    if change == "token_gone":
+        fake_api.error = DashcamSyncAuthError("token rotated")
+    elif change == "other_instance":
+        fake_api.info["instance"] = "inst-reinstalled"
+    elif change == "app_down":
+        fake_api.error = DashcamSyncConnectionError("timeout")
+    else:
+        fake_api.info["api_version"] = 99
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == reason
+    assert not hass.config_entries.async_entries(DOMAIN)
+
+
 async def test_reauth(hass: HomeAssistant, fake_api: FakeApi, loaded: MockConfigEntry) -> None:
     result = await loaded.start_reauth_flow(hass)
     assert result["step_id"] == "reauth_confirm"

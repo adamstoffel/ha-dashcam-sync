@@ -323,3 +323,32 @@ async def test_reload_reads_the_host_network_again(hass: HomeAssistant, hassio: 
         "wlan1",
     ]
     hassio.network.reload.assert_awaited_once()  # and a failed reload still reads the state
+
+
+async def test_the_supervisors_activation_failure_is_a_failed_link(
+    hass: HomeAssistant, hassio: MagicMock
+) -> None:
+    """The Supervisor waits for the link and says when it fails: not a refused profile."""
+    hassio.network._client.post.side_effect = RuntimeError(
+        "Activating connection failed, check connection settings."
+    )
+    with pytest.raises(wifi.WifiLinkFailed):
+        await wifi.async_apply_profile(hass, PROFILE)
+    hassio.network._client.post.side_effect = RuntimeError("extra keys not allowed")
+    with pytest.raises(WifiUnavailable) as err:
+        await wifi.async_apply_profile(hass, PROFILE)
+    assert not isinstance(err.value, wifi.WifiLinkFailed)
+
+
+async def test_a_link_networkmanager_gave_up_on_is_reported_early(hass: HomeAssistant) -> None:
+    """Not connected and not activating any more: no need to wait out the whole timeout."""
+    import time
+
+    listing = AsyncMock(return_value=wifi_state(False, "CAM"))
+    with (
+        patch.object(wifi, "async_list_wifi_interfaces", listing),
+        patch.object(wifi, "async_scan_access_points", AsyncMock(return_value=[{"ssid": "CAM"}])),
+    ):
+        started = time.monotonic()
+        result = await wifi.async_verify_join(hass, PROFILE, wait=30, poll=0.01, gave_up_after=0.05)
+    assert result == ("failed", "wrong_password") and time.monotonic() - started < 5

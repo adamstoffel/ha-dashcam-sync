@@ -221,3 +221,79 @@ async def test_unloading_cancels_a_running_join(
         assert await hass.config_entries.async_unload(loaded.entry_id)
         await settle(hass)
     assert fake_api.calls_named("join_result") == []
+
+
+@pytest.mark.parametrize(
+    ("visible", "reason"), [(["CAMWIFI"], "wrong_password"), (["HOME"], "not_in_range")]
+)
+async def test_a_link_the_supervisor_could_not_activate_says_why(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi, visible: list, reason: str
+) -> None:
+    """Not the "join it by hand" steps: the profile was fine, the camera refused it."""
+    from custom_components.dashcam_sync.wifi import WifiLinkFailed
+
+    aps = [{"ssid": s} for s in visible]
+    with (
+        patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
+        patch(
+            f"{W}.async_apply_profile",
+            AsyncMock(side_effect=WifiLinkFailed("Activating connection failed")),
+        ),
+        patch(f"{W}.async_scan_access_points", AsyncMock(return_value=aps)),
+        patch(f"{W}.JOIN_RETRY_DELAY", 0),  # a refused link is tried again first
+    ):
+        assert await join(hass, fake_api) == ("family_car", "failed", reason)
+
+
+async def test_a_refused_link_is_tried_again(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi, link_comes_up: AsyncMock
+) -> None:
+    """A weak link drops handshake frames, and the camera refuses as if the password
+    were wrong; a later try often gets through (seen on a real SGK camera)."""
+    link_comes_up.side_effect = [
+        ("failed", "wrong_password"),
+        ("failed", "wrong_password"),
+        ("joined", None),
+    ]
+    apply = AsyncMock()
+    with (
+        patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
+        patch(f"{W}.async_apply_profile", apply),
+        patch(f"{W}.JOIN_RETRY_DELAY", 0),
+    ):
+        assert await join(hass, fake_api) == ("family_car", "joined", None)
+    assert apply.await_count == 3
+    states = [r[1] for r in fake_api.calls_named("join_result")]
+    assert states == [
+        "connecting",
+        "connecting",
+        "connecting",
+        "joined",
+    ]  # each try resets the wait
+
+
+@pytest.mark.parametrize(
+    ("answers", "tries", "final"),
+    [
+        ([("failed", "not_in_range")], 1, ("failed", "not_in_range")),  # nothing to retry
+        ([("failed", "wrong_password")] * 3, 3, ("failed", "wrong_password")),  # gives up
+    ],
+)
+async def test_retries_only_a_camera_that_is_there_and_stop(
+    hass: HomeAssistant,
+    loaded: MockConfigEntry,
+    fake_api: FakeApi,
+    link_comes_up: AsyncMock,
+    answers: list,
+    tries: int,
+    final: tuple,
+) -> None:
+    link_comes_up.side_effect = answers
+    apply = AsyncMock()
+    with (
+        patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
+        patch(f"{W}.async_apply_profile", apply),
+        patch(f"{W}.JOIN_RETRY_DELAY", 0),
+    ):
+        assert await join(hass, fake_api) == ("family_car", *final)
+    assert apply.await_count == tries

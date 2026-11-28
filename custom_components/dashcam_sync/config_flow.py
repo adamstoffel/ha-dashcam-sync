@@ -116,6 +116,11 @@ class DashcamSyncConfigFlow(ConfigFlow, domain=DOMAIN):
         self._abort_if_unique_id_configured(
             updates={CONF_HOST: host, CONF_PORT: port, CONF_TOKEN: token}
         )
+        # A reinstalled app is a new instance with a new token: the card it showed before
+        # would set up an entry that can never connect, so the newest announcement wins.
+        # A plain dict at runtime; the key marks which app this card is for.
+        self.context["app_slug"] = discovery_info.slug  # type: ignore[typeddict-unknown-key]
+        self._abort_superseded_discoveries(discovery_info.slug)
         self._discovered = {
             CONF_HOST: host,
             CONF_PORT: port,
@@ -125,10 +130,32 @@ class DashcamSyncConfigFlow(ConfigFlow, domain=DOMAIN):
         self.context["title_placeholders"] = {"name": discovery_info.name}
         return await self.async_step_hassio_confirm()
 
+    @callback
+    def _abort_superseded_discoveries(self, slug: str) -> None:
+        """Close the cards an earlier install of the same app left behind."""
+        manager = self.hass.config_entries.flow
+        for flow in manager.async_progress_by_handler(DOMAIN, include_uninitialized=True):
+            context = flow.get("context") or {}
+            if flow["flow_id"] != self.flow_id and context.get("app_slug") == slug:
+                manager.async_abort(flow["flow_id"])
+
     async def async_step_hassio_confirm(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         if user_input is not None:
+            # The card may be old: the app restarted or was reinstalled since, and that
+            # token is gone. Check again rather than create an entry that cannot connect.
+            d = self._discovered
+            info, error = await _validate(self, d[CONF_HOST], d[CONF_PORT], d[CONF_TOKEN])
+            # Outdated only when the app says so: the token was rejected, or another
+            # instance answers. Any other failure keeps its own reason (the app is down,
+            # the versions differ) instead of advice that does not apply.
+            if error == "invalid_auth" or (
+                info is not None and info.get("instance") != self.unique_id
+            ):
+                return self.async_abort(reason="discovery_outdated")
+            if info is None:
+                return self.async_abort(reason=error or "unknown")
             return self.async_create_entry(title="Dashcam Sync", data=self._discovered)
         return self.async_show_form(
             step_id="hassio_confirm",

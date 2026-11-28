@@ -1,10 +1,28 @@
 name: Release
 
-# Tag vYYYY.M.patch (or vYYYY.M.patchbN for a beta). The integration's manifest
-# version must equal the tag, and a stable tag needs a passing hardware gate.
+# Runs for a pushed tag vYYYY.M.patch (or vYYYY.M.patchbN for a beta), or when
+# auto-release.yml calls it after a version bump reaches main; then the tag is created
+# on that commit by the last step, once CI and the images have passed. The integration's
+# manifest version must equal the tag, and a stable tag needs a passing hardware gate.
 on:
   push:
     tags: ["v*"]
+  workflow_call:
+    inputs:
+      tag:
+        description: "The release tag, e.g. v2026.11.0b2"
+        required: true
+        type: string
+    # A called workflow sees only the secrets its caller passes: the store job needs this one.
+    secrets:
+      RELEASE_DEPLOY_KEY:
+        required: false
+
+# One run per tag at a time: a tag pushed by hand while the automatic run for the same
+# version is going waits for it, then stops at the gate below instead of publishing twice.
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -13,6 +31,7 @@ permissions:
 
 env:
   OWNER: ${{ github.repository_owner }}
+  TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   gates:
@@ -22,12 +41,35 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
-      - run: python scripts/check_versions.py "${{ github.ref_name }}"
-      - run: python scripts/check_hardware_gate.py "${{ github.ref_name }}"
+      - run: python scripts/check_versions.py "$TAG"
+      - run: python scripts/check_hardware_gate.py "$TAG"
+      - name: Not already published, and the tag (if any) is on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail  # a failed lookup below must stop here, not read as "none"
+          # Another run got here first: publishing again would overwrite or mix its artifacts.
+          # Only a 404 means "not released"; any other lookup failure stops the release.
+          if out="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" 2>&1)"; then
+            echo "::error::$TAG is already released."; exit 1
+          fi
+          case "$out" in
+            *"HTTP 404"*) ;;
+            *) echo "::error::Could not check whether $TAG is released: $out"; exit 1 ;;
+          esac
+          # An annotated tag lists its commit as <tag>^{}; a lightweight one as the tag itself.
+          peeled="$(git ls-remote origin "refs/tags/$TAG^{}" | cut -f1)"
+          plain="$(git ls-remote origin "refs/tags/$TAG" | cut -f1)"
+          tagged="${peeled:-$plain}"
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG already points at another commit ($tagged)."; exit 1
+          fi
 
   ci:
     needs: gates
     uses: ./.github/workflows/ci.yml
+    with:
+      release: true
 
   image:
     name: Image ${{ matrix.arch }}
@@ -43,7 +85,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - id: v
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
@@ -90,8 +132,56 @@ jobs:
       - uses: actions/checkout@v7
       - name: Zip the integration
         run: cd custom_components/dashcam_sync && zip -r ../../dashcam_sync.zip .
+      # Creates the tag on this commit when it does not exist yet (the automatic path).
       - uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, 'b') }}
+          prerelease: ${{ contains(env.TAG, 'b') }}
           files: dashcam_sync.zip
+
+  # The app store offers whatever version config.yaml names on main, and pulls that
+  # image right away. So the version in config.yaml moves only now, once the images
+  # and the release exist; a pull request leaves it at the last published version.
+  # main is protected, so this pushes with the RELEASE_DEPLOY_KEY deploy key, which
+  # the ruleset lets bypass (CONTRIBUTING, "Branches and releases").
+  store:
+    name: Offer it in the app store
+    needs: github-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Needs the release deploy key
+        env:
+          KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::No RELEASE_DEPLOY_KEY secret: images and release are published, but the app store does not offer $TAG yet. Add the key (CONTRIBUTING), then re-run this job."
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Set the app store version on main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3 4; do
+            # Start from the newest main each time: another merge may have landed.
+            git fetch origin main && git reset --hard origin/main
+            python scripts/check_versions.py --set-store "$TAG"
+            if git diff --quiet; then
+              echo "::notice::main already offers ${TAG#v} or newer."
+              exit 0
+            fi
+            git commit -qam "Offer ${TAG#v} in the app store"
+            if git push origin HEAD:main; then exit 0; fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::Could not update main after 4 attempts."
+          exit 1

@@ -281,7 +281,7 @@ const SCAN_REASONS = {
 const JOIN_REASONS = {
   integration_not_connected: "The Dashcam Sync integration is not connected to this app, so Home Assistant cannot be asked to join.",
   no_answer: "Home Assistant did not answer the join request. If the integration was just updated, restart Home Assistant.",
-  wrong_password: "Home Assistant sees the camera's Wi-Fi but could not connect to it. The Wi-Fi password is most likely wrong.",
+  wrong_password: "Home Assistant sees the camera's Wi-Fi, but the camera refused it three times. The usual causes: a weak signal at Home Assistant's Wi-Fi adapter (the camera drops a client whose handshake is slow, as if its password were wrong; park closer, or use a USB adapter with an antenna), another device connected to the camera (many take one at a time), or a wrong password.",
   not_in_range: "Home Assistant cannot see the camera's Wi-Fi. Is the camera on, and the car within range? Check the SSID too.",
   not_connected: "Home Assistant could not connect to the camera's Wi-Fi.",
   device_in_block: "A device on your network uses an address in the camera's reserved block. Run Network check on the camera for details.",
@@ -510,7 +510,7 @@ async function wizard(existing) {
         <div class="field-row"><input id="w-ssid" name="ssid" value="${esc(st.ssid)}" autocomplete="off" autocapitalize="off" spellcheck="false"><button id="w-scan">Scan</button></div>
         <div id="w-aps">${apList()}</div>
         <label for="w-pass">Camera Wi-Fi password</label>
-        <input id="w-pass" name="wifi-password" type="password" autocomplete="new-password" placeholder="${edit ? "leave empty to keep the current one" : ""}">
+        <div class="field-row"><input id="w-pass" name="wifi-password" type="password" autocomplete="new-password" autocapitalize="off" spellcheck="false" placeholder="${edit ? "leave empty to keep the current one" : ""}"><button class="text" id="w-pass-show" type="button" aria-pressed="false" aria-controls="w-pass">Show</button></div>
         <label for="w-camip">Camera IP on its hotspot</label>
         <select id="w-camip">${Object.entries(CAMERA_IPS).map(([ip, t]) => `<option value="${ip}" ${camIp() === ip ? "selected" : ""}>${ip} · ${t}</option>`).join("")}
           <option value="other" ${camIp() === "other" ? "selected" : ""}>Other…</option></select>
@@ -549,6 +549,14 @@ async function wizard(existing) {
       b.onclick = () => { st.ssid = b.dataset.ssid; $("#w-ssid", box).value = st.ssid; $("#w-aps", box).innerHTML = apList(); bindAps(); $("#w-pass", box).focus(); };
     });
     bindAps();
+    // Show what was typed: a camera password is easy to get wrong on a phone keyboard.
+    if ($("#w-pass-show", box)) $("#w-pass-show", box).onclick = (e) => {
+      const input = $("#w-pass", box), shown = input.type === "password";
+      input.type = shown ? "text" : "password";
+      e.currentTarget.textContent = shown ? "Hide" : "Show";
+      e.currentTarget.setAttribute("aria-pressed", String(shown));
+      input.focus();
+    };
     if ($("#w-scan", box)) $("#w-scan", box).onclick = async () => {
       read();
       const btn = $("#w-scan", box); btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>`;

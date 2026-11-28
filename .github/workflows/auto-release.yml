@@ -1,0 +1,72 @@
+name: Auto release
+
+# Merging a version bump to main publishes it. The version is the integration's
+# manifest version (check_versions makes the other release copies agree; the app
+# store's config.yaml version is set by the release itself, once the images exist).
+# When its tag already exists, nothing happens, so merges that do not bump the
+# version release nothing. A stable version without a passing hardware gate is
+# skipped with a notice: record the gate, then push the tag by hand (or re-run this
+# workflow).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# No workflow-wide concurrency group: GitHub keeps only one pending run per group, so
+# two version bumps merged while a release runs would lose the first. Each run reads
+# the version of its own commit; release.yml serialises runs of the same tag.
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    # Only main: a manual run on another branch must not publish that branch's commit.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - id: plan
+        run: |
+          version="$(python -c 'import json;print(json.load(open("custom_components/dashcam_sync/manifest.json"))["version"])')"
+          tag="v${version}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          # Exit 2 means "no such tag"; any other failure (network, auth) must stop
+          # here, not read as "not released yet" and publish over an existing release.
+          status=0
+          git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "::notice::${tag} is already released; nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          elif [ "$status" -ne 2 ]; then
+            echo "::error::Could not look up ${tag} (git ls-remote exited ${status})."
+            exit 1
+          fi
+          python scripts/check_versions.py "${tag}"
+          if ! python scripts/check_hardware_gate.py "${tag}"; then
+            echo "::warning::${tag} is a stable version without a passing hardware gate; not released. Record docs/hardware-gate/${version}.md, then push the tag."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::notice::Releasing ${tag}."
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+    secrets:
+      RELEASE_DEPLOY_KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+    permissions:
+      contents: write
+      packages: write
+      id-token: write

@@ -2,6 +2,14 @@
 
 All notable changes to the integration and the app. Both are released together with the same CalVer version (`YYYY.M.patch`).
 
+## Unreleased
+
+- Fixed: when the Supervisor itself reports that the camera's Wi-Fi did not come up ("Activating connection failed"), the wizard now says whether the camera refused the password or is out of range, as it does when the link fails later, instead of showing the steps to join by hand.
+- The camera's Wi-Fi password can be shown while typing it in the wizard (**Show**).
+- Joining a camera's Wi-Fi is tried up to three times. A weak signal at Home Assistant's adapter slows the handshake, and the camera then drops the client as if the password were wrong; a later try often gets through. A link that NetworkManager gave up on is noticed within seconds instead of after 45. The wizard's message and the troubleshooting page name the weak signal, another connected device and a wrong password.
+- Releases are automatic: merging a version bump to `main` runs the release (CI, signed images, GitHub release and tag), and its last step sets the app's `config.yaml` version on `main`. Home Assistant offered 2026.11.0b2 while its images were still being built, so updating failed with "not found"; the app store now sees a new version only once its images exist. See CONTRIBUTING, *Branches and releases*.
+- Fixed: after the app was reinstalled, Home Assistant showed two discovered *Dashcam Sync* cards, one from the earlier install whose token no longer works. A new announcement from the app now closes its earlier card, and **Add** checks the app again before creating the entry, so an outdated card can never set up an entry that cannot connect.
+
 ## 2026.11.0b2
 
 - Fixed: a camera with a wrong Wi-Fi password looked like it was still being joined ("Waiting for the camera to answer…"). The Supervisor takes a profile before the host tries it, so the integration now waits for the interface to come up on the camera's network before reporting it joined. If it does not, it scans: the network in range means the password is wrong, otherwise the camera is out of range. The wizard says which, and offers **Change the password** or **Check the SSID**.
