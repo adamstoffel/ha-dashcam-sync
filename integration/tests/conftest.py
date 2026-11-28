@@ -64,6 +64,7 @@ STATUS: dict[str, Any] = {
     "api_version": 1,
     "app_version": "2026.11.0",
     "uptime": 100,
+    "integration": {"connected": True, "version": RELEASE, "app_release": RELEASE, "matches": True},
     "cameras": {"family_car": CAMERA},
     "storage": {
         "mode": "local",

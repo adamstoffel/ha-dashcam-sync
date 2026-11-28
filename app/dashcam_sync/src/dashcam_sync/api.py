@@ -156,8 +156,10 @@ async def websocket(request: web.Request) -> web.StreamResponse:
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
     request.app[SOCKETS].add(ws)
-    # Only the integration opens this socket; it says which release it is.
-    d.integration_links[id(ws)] = request.headers.get(INTEGRATION_HEADER, "")[:40] or None
+    # On the token port this is the integration, and it says which release it is. The
+    # ingress port serves the same feed to the panel's browser: that is not an integration.
+    if request.app[SECRETS]:
+        d.integration_links[id(ws)] = request.headers.get(INTEGRATION_HEADER, "")[:40] or None
     queue = d.bus.subscribe()
     task: asyncio.Task[None] | None = None
 

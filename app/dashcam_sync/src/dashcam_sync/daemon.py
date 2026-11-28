@@ -593,7 +593,7 @@ class Daemon:
     def request_join(self, cam: CameraOptions) -> dict[str, Any]:
         """Ask Home Assistant to join a camera hotspot; it answers with ``set_join_result``."""
         state: dict[str, Any]
-        if self.bus.subscribers == 0:
+        if not self.integration_links:
             state = {"state": "manual", "reason": "integration_not_connected"}
         else:
             state = {"state": "requested", "reason": None}
@@ -603,7 +603,7 @@ class Daemon:
 
     async def scan_via_home_assistant(self, interface: str) -> dict[str, Any]:
         """Ask the integration to scan (Home Assistant may; this app's role may not)."""
-        if self.bus.subscribers == 0:
+        if not self.integration_links:
             return {"error": "integration_not_connected"}
         request = secrets.token_hex(6)
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()

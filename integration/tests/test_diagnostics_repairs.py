@@ -138,7 +138,10 @@ async def test_a_different_app_release_is_a_repair_issue(
 ) -> None:
     """An app from another release (or one too old to say) is the usual cause of a join
     request nobody answers: say so where Home Assistant shows problems."""
-    fake_api.info["release"] = app_release
+    if app_release is None:  # an app too old to say
+        del fake_api.status["integration"]
+    else:
+        fake_api.status["integration"]["app_release"] = app_release
     await setup_entry(hass, entry)
     issue = ir.async_get(hass).async_get_issue(DOMAIN, "release_mismatch")
     assert issue is not None and issue.translation_placeholders == {
@@ -280,3 +283,11 @@ async def test_the_release_check_follows_an_app_restart(
     restarted_on(RELEASE)  # and back on the same release: the repair goes away
     await hass.async_block_till_done()
     assert registry.async_get_issue(DOMAIN, "release_mismatch") is None
+
+    # Rolled back to an app too old to report its release: still a different release.
+    legacy = {k: v for k, v in fake_api.status.items() if k != "integration"}
+    fake_api.push({"type": "snapshot", **legacy})
+    await hass.async_block_till_done()
+    issue = registry.async_get_issue(DOMAIN, "release_mismatch")
+    assert issue is not None
+    assert issue.translation_placeholders["app_release"] == "older than 2026.11.0b2"
