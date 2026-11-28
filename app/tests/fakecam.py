@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -47,6 +48,11 @@ class Faults:
     range_restart_206: bool = False  # answer a Range with 206 from byte 0 (honestly labelled)
     range_wrong_start: int = 0  # answer a Range from this many bytes earlier (labelled so)
     cuts_done: set[str] = field(default_factory=set)
+
+
+def _link(href: str, text: str) -> str:
+    """One entry of a directory listing; names are escaped as a real web server does."""
+    return f'<a href="{html.escape(href, quote=True)}">{html.escape(text)}</a><br>'
 
 
 class FakeCamera:
@@ -377,27 +383,25 @@ class FakeCamera:
         path = request.path
         folders = sorted({f.url.rsplit("/", 1)[0] + "/" for f in self.files})
         if path == "/":
-            links = "".join(f'<a href="{d}">{d}</a><br>' for d in folders if d.count("/") == 2)
+            links = "".join(_link(d, d) for d in folders if d.count("/") == 2)
             links += "".join(
-                f'<a href="{d}">{d}</a><br>'
-                for d in self._all_folders()
-                if d.count("/") == 2 and d not in folders
+                _link(d, d) for d in self._all_folders() if d.count("/") == 2 and d not in folders
             )
-            html = f"<html><title>Index of /</title><body><h1>Index of /</h1>{links}</body></html>"
-            return web.Response(text=html, content_type="text/html")
+            page = f"<html><title>Index of /</title><body><h1>Index of /</h1>{links}</body></html>"
+            return web.Response(text=page, content_type="text/html")
         if path in self._all_folders():
             links = "".join(
-                f'<a href="{d}">{d}</a><br>'
+                _link(d, d)
                 for d in self._all_folders()
                 if d != path and d.startswith(path) and d.count("/") == path.count("/") + 1
             )
             links += "".join(
-                f'<a href="{f.url}">{f.url.rsplit("/", 1)[-1]}</a><br>'
+                _link(f.url, f.url.rsplit("/", 1)[-1])
                 for f in self.files
                 if f.url.rsplit("/", 1)[0] + "/" == path
             )
             return web.Response(
-                text=f"<html><body><h1>Index of {path}</h1>{links}</body></html>",
+                text=f"<html><body><h1>Index of {html.escape(path)}</h1>{links}</body></html>",
                 content_type="text/html",
             )
         return web.Response(status=404)
