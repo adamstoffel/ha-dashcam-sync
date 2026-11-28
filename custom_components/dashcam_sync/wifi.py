@@ -37,6 +37,10 @@ class WifiInterface:
     connected: bool
     enabled: bool
     ssid: str | None
+    # The link is up and has its IPv4 address. ``connected`` alone is not that: the
+    # Supervisor counts a connection that is still activating (authenticating, for one) as
+    # connected, and ``ssid`` is the profile's, not the access point's.
+    ready: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +119,7 @@ async def async_list_wifi_interfaces(
                 connected=bool(iface.connected),
                 enabled=bool(iface.enabled),
                 ssid=iface.wifi.ssid if iface.wifi else None,
+                ready=bool(getattr(getattr(iface, "ipv4", None), "ready", False)),
             )
         )
     return out
@@ -317,6 +322,7 @@ async def async_verify_join(
             for iface in await async_list_wifi_interfaces(hass, reload=True):
                 if (
                     iface.name == profile.interface
+                    and iface.ready  # up with its address, not still authenticating
                     and iface.connected
                     and iface.ssid == profile.ssid
                 ):

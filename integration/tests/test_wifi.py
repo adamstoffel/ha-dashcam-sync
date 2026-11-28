@@ -238,14 +238,19 @@ async def test_known_device_ips(hass: HomeAssistant) -> None:
     assert wifi.known_device_ips(hass) == ["10.0.0.7", "192.168.1.200", "192.168.1.55"]
 
 
-def wifi_state(connected: bool, ssid: str | None) -> list:
-    return [wifi.WifiInterface("wlan0", connected=connected, enabled=True, ssid=ssid)]
+def wifi_state(connected: bool, ssid: str | None, ready: bool | None = None) -> list:
+    return [
+        wifi.WifiInterface(
+            "wlan0", connected=connected, enabled=True, ssid=ssid,
+            ready=connected if ready is None else ready,
+        )
+    ]  # fmt: skip
 
 
 @pytest.mark.parametrize(
     ("interfaces", "visible", "expected"),
     [
-        # The interface comes up on the camera's network.
+        # The interface comes up on the camera's network, with its address.
         (wifi_state(True, "CAM"), [], ("joined", None)),
         # It never does, while the camera's network is in range: the passphrase.
         (
@@ -253,6 +258,9 @@ def wifi_state(connected: bool, ssid: str | None) -> list:
             [{"ssid": "CAM"}, {"ssid": "HOME"}],
             ("failed", "wrong_password"),
         ),
+        # Still authenticating: the Supervisor already says "connected" and names the
+        # profile's SSID, but the link never gets its address. Not joined.
+        (wifi_state(True, "CAM", ready=False), [{"ssid": "CAM"}], ("failed", "wrong_password")),
         # It never does, and the network is not there at all.
         (wifi_state(False, None), [{"ssid": "HOME"}], ("failed", "not_in_range")),
         # Up, but on another network, is not joined either.
@@ -270,6 +278,29 @@ async def test_a_join_is_checked_not_assumed(
     ):
         assert await wifi.async_verify_join(hass, PROFILE, wait=0.05, poll=0.01) == expected
     assert listing.await_args.kwargs == {"reload": True}  # fresh state, not the cached one
+
+
+async def test_activating_then_failing_is_not_joined(hass: HomeAssistant) -> None:
+    """Activating (connected, no address yet), then the handshake fails and it drops."""
+    states = iter([wifi_state(True, "CAM", ready=False), wifi_state(False, "CAM")])
+    last = wifi_state(False, "CAM")
+    listing = AsyncMock(side_effect=lambda *_a, **_kw: next(states, last))
+    with (
+        patch.object(wifi, "async_list_wifi_interfaces", listing),
+        patch.object(wifi, "async_scan_access_points", AsyncMock(return_value=[{"ssid": "CAM"}])),
+    ):
+        assert await wifi.async_verify_join(hass, PROFILE, wait=0.05, poll=0.01) == (
+            "failed",
+            "wrong_password",
+        )
+
+
+async def test_the_interface_state_carries_readiness(
+    hass: HomeAssistant, hassio: MagicMock
+) -> None:
+    hassio.network.info.return_value.interfaces[1].ipv4 = SimpleNamespace(ready=True)
+    found = {i.name: i.ready for i in await wifi.async_list_wifi_interfaces(hass)}
+    assert found == {"wlan0": True, "wlan1": False}  # no ipv4 block reads as not ready
 
 
 async def test_a_join_check_without_a_scan_still_answers(hass: HomeAssistant) -> None:

@@ -1122,6 +1122,26 @@ async def test_the_panel_can_tell_whether_the_integration_is_paired(stack: Stack
         assert info["integration"]["connected"] is False
 
 
+async def test_a_socket_that_fails_its_first_snapshot_is_not_left_paired(
+    stack: Stack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Otherwise the panel would keep showing an integration that is gone."""
+
+    async def broken() -> dict[str, Any]:
+        raise RuntimeError("status failed")
+
+    monkeypatch.setattr(stack.daemon, "status_with_rev", broken)
+    headers = {**stack.h(), "X-Dashcam-Sync-Integration": "2026.11.0b2"}
+    async with stack.http.ws_connect(f"{stack.api}/api/v1/ws", headers=headers) as ws:
+        await ws.receive()  # the server closes it
+    for _ in range(100):
+        if not stack.daemon.integration_links:
+            break
+        await asyncio.sleep(0.01)
+    assert stack.daemon.integration_links == {}
+    assert stack.daemon.bus.subscribers == 0
+
+
 async def test_join_results_are_refused_on_the_ingress_port(stack: Stack) -> None:
     await _hotspot(stack)
     async with stack.http.post(

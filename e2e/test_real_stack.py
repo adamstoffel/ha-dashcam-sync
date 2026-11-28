@@ -293,7 +293,7 @@ async def test_the_panel_asks_home_assistant_to_join_a_hotspot(
     def adapters(*_args: object, **_kw: object) -> list[WifiInterface]:
         # The link comes up once the profile is applied: the integration checks for that.
         up = apply.await_count > 0
-        return [WifiInterface("wlan0", up, True, "CARDV" if up else None)]
+        return [WifiInterface("wlan0", up, True, "CARDV" if up else None, ready=up)]
 
     W = "custom_components.dashcam_sync.wifi"
     seen: list[str] = []

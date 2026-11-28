@@ -118,13 +118,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry) 
     # The app and the integration are released together; a different release on either
     # side is the usual cause of a feature that "does nothing" (an older app, say, that
     # never answers a request this integration sends).
-    app_release = info.get("release")
-    issues.async_set_own(
-        ISSUE_RELEASE_MISMATCH,
-        bool(integration_version) and app_release != integration_version,
-        app_release=str(app_release or "older than 2026.11.0b2"),
-        integration_release=integration_version,
-    )
+    setup_release = info.get("release")
+
+    @callback
+    def _check_release() -> None:
+        # Again on every update: an app restarted on another release reconnects the push
+        # socket without setting this entry up again.
+        pairing = coordinator.hub.get("integration")
+        app_release = pairing.get("app_release") if isinstance(pairing, dict) else setup_release
+        issues.async_set_own(
+            ISSUE_RELEASE_MISMATCH,
+            bool(integration_version) and app_release != integration_version,
+            app_release=str(app_release or "older than 2026.11.0b2"),
+            integration_release=integration_version,
+        )
+
+    _check_release()
+    entry.async_on_unload(coordinator.async_add_listener(_check_release))
     announced = await async_announced_wifi_adapters(hass)
     issues.async_set_own(ISSUE_ANNOUNCED_ADAPTER, bool(announced), adapters=", ".join(announced))
 

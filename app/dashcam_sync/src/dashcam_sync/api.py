@@ -159,24 +159,28 @@ async def websocket(request: web.Request) -> web.StreamResponse:
     # Only the integration opens this socket; it says which release it is.
     d.integration_links[id(ws)] = request.headers.get(INTEGRATION_HEADER, "")[:40] or None
     queue = d.bus.subscribe()
-    await ws.send_json({"type": "snapshot", **await d.status_with_rev()})
+    task: asyncio.Task[None] | None = None
 
     async def pump() -> None:
         while True:
             event = await queue.get()
             await ws.send_json(event)
 
-    task = asyncio.create_task(pump())
+    # Everything after registering is inside the try: a client gone while the first
+    # snapshot is sent must not stay counted as a connected integration.
     try:
+        await ws.send_json({"type": "snapshot", **await d.status_with_rev()})
+        task = asyncio.create_task(pump())
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.TEXT and msg.data == "snapshot":
                 await ws.send_json({"type": "snapshot", **await d.status_with_rev()})
             elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):
                 break
     finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         d.bus.unsubscribe(queue)
         d.integration_links.pop(id(ws), None)
         request.app[SOCKETS].discard(ws)

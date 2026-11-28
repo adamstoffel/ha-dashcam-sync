@@ -665,6 +665,7 @@ async function wizard(existing) {
       if ($("#w-back", out)) $("#w-back", out).onclick = () => { clearInterval(poller); st.password = ""; st.step = 2; draw(); };
     };
     const start = async () => {
+      clearInterval(poller);  // the pairing check's own poll, when started from it
       try { await api(`cameras/${st.id}/join`, { method: "POST" }); } catch (e) { out.innerHTML = `<div class="card notice bad">${esc(e.message)}</div>`; return; }
       await poll();
       poller = setInterval(poll, 2000);

@@ -258,3 +258,25 @@ async def test_fix_flow_through_the_repairs_api(
     assert (await resp.json())["type"] == "create_entry"
     assert fake_api.calls_named("restore")
     _ = pytest
+
+
+async def test_the_release_check_follows_an_app_restart(
+    hass: HomeAssistant, fake_api: FakeApi, entry: MockConfigEntry
+) -> None:
+    """An app updated or restarted reconnects the push socket without a new entry setup."""
+    await setup_entry(hass, entry)
+    registry = ir.async_get(hass)
+    assert registry.async_get_issue(DOMAIN, "release_mismatch") is None
+
+    def restarted_on(release: str) -> None:
+        pairing = {"connected": True, "version": RELEASE, "app_release": release}
+        fake_api.push({"type": "snapshot", **{**fake_api.status, "integration": pairing}})
+
+    restarted_on("2026.12.0")
+    await hass.async_block_till_done()
+    issue = registry.async_get_issue(DOMAIN, "release_mismatch")
+    assert issue is not None and issue.translation_placeholders["app_release"] == "2026.12.0"
+
+    restarted_on(RELEASE)  # and back on the same release: the repair goes away
+    await hass.async_block_till_done()
+    assert registry.async_get_issue(DOMAIN, "release_mismatch") is None
