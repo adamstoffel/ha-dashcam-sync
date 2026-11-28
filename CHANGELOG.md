@@ -5,6 +5,7 @@ All notable changes to the integration and the app. Both are released together w
 ## Unreleased
 
 - Releases are automatic: merging a version bump to `main` runs the release (CI, signed images, GitHub release and tag). See CONTRIBUTING, *Branches and releases*.
+- Fixed: after the app was reinstalled, Home Assistant showed two discovered *Dashcam Sync* cards, one from the earlier install whose token no longer works. A new announcement from the app now closes its earlier card, and **Add** checks the app again before creating the entry, so an outdated card can never set up an entry that cannot connect.
 
 ## 2026.11.0b2
 

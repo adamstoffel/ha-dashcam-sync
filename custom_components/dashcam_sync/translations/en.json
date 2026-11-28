@@ -51,7 +51,8 @@
       "unknown": "Unexpected error.",
       "reauth_successful": "The token was updated.",
       "reconfigure_successful": "The connection was updated.",
-      "unique_id_mismatch": "That is a different Dashcam Sync app."
+      "unique_id_mismatch": "That is a different Dashcam Sync app.",
+      "discovery_outdated": "This discovery is out of date: the Dashcam Sync app was restarted or reinstalled since. Restart the app and use the new card."
     }
   },
   "options": {
