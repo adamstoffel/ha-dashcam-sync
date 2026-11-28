@@ -6,10 +6,18 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      release:
+        description: "Called by the release workflow: never cancelled by a later push"
+        type: boolean
+        default: false
 
+# A newer push cancels the CI of an older one on the same ref. A release's CI (called
+# with release: true) runs on main's ref too, so it gets its own group and is never
+# cancelled: a merge landing meanwhile must not stop a release half way.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ inputs.release && 'release-' || '' }}${{ github.ref }}
+  cancel-in-progress: ${{ !inputs.release }}
 
 permissions:
   contents: read

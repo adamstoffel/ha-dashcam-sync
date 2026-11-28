@@ -37,6 +37,8 @@ jobs:
   ci:
     needs: gates
     uses: ./.github/workflows/ci.yml
+    with:
+      release: true
 
   image:
     name: Image ${{ matrix.arch }}

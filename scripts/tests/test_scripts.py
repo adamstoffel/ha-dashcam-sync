@@ -138,6 +138,11 @@ def test_a_version_bump_on_main_releases_itself() -> None:
     assert "TAG: ${{ inputs.tag || github.ref_name }}" in release
     assert "tag_name: ${{ env.TAG }}" in release  # the release creates the tag last
     assert "github.ref_name" not in release.replace("inputs.tag || github.ref_name", "")
+    assert "if: github.ref == 'refs/heads/main'" in auto  # a manual run elsewhere does nothing
+    # A release's CI is never cancelled by a later push to main.
+    ci = (wf / "ci.yml").read_text()
+    assert "with:\n      release: true" in release
+    assert "cancel-in-progress: ${{ !inputs.release }}" in ci
 
 
 def _fake_ha(tmp_path: Path) -> Path:
