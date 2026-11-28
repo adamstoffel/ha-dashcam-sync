@@ -130,3 +130,48 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ contains(env.TAG, 'b') }}
           files: dashcam_sync.zip
+
+  # The app store offers whatever version config.yaml names on main, and pulls that
+  # image right away. So the version in config.yaml moves only now, once the images
+  # and the release exist; a pull request leaves it at the last published version.
+  # main is protected, so this pushes with the RELEASE_DEPLOY_KEY deploy key, which
+  # the ruleset lets bypass (CONTRIBUTING, "Branches and releases").
+  store:
+    name: Offer it in the app store
+    needs: github-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Needs the release deploy key
+        env:
+          KEY: ${{ secrets.RELEASE_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::No RELEASE_DEPLOY_KEY secret: images and release are published, but the app store does not offer $TAG yet. Add the key (CONTRIBUTING), then re-run this job."
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          ssh-key: ${{ secrets.RELEASE_DEPLOY_KEY }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Set the app store version on main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3 4; do
+            # Start from the newest main each time: another merge may have landed.
+            git fetch origin main && git reset --hard origin/main
+            python scripts/check_versions.py --set-store "$TAG"
+            if git diff --quiet; then
+              echo "::notice::main already offers ${TAG#v} or newer."
+              exit 0
+            fi
+            git commit -qam "Offer ${TAG#v} in the app store"
+            if git push origin HEAD:main; then exit 0; fi
+            sleep $((attempt * 5))
+          done
+          echo "::error::Could not update main after 4 attempts."
+          exit 1

@@ -29,6 +29,26 @@ def test_versions_agree_with_the_current_tag() -> None:
     assert versions.check(f"v{current}") == []
 
 
+def test_the_app_store_version_lags_but_never_leads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """config.yaml moves only when a release has published its images."""
+    release = next(iter(set(versions.collect().values())))
+    config = tmp_path / "config.yaml"
+    config.write_text('name: x\nversion: "2026.1.0"\nslug: y\n')
+    monkeypatch.setattr(versions, "CONFIG", config)
+    assert versions.check(None) == []  # behind the release version: fine
+    assert versions.check(f"v{release}") == []  # and at release time too
+    assert versions.set_store(release) is True
+    assert 'version: "' + release + '"' in config.read_text() and "slug: y" in config.read_text()
+    assert versions.set_store(release) is False  # already offered
+    assert versions.set_store("2026.1.0") is False  # never moves back
+    config.write_text('version: "2099.1.0"\n')
+    assert any("ahead of the release version" in p for p in versions.check(None))
+
+
+def test_a_beta_sorts_before_its_release() -> None:
+    assert versions.order("2026.11.0b2") < versions.order("2026.11.0") < versions.order("2026.11.1b1")
+
+
 def test_versions_reject_a_mismatched_tag() -> None:
     problems = versions.check("v1999.1.0")
     assert problems and all("tag is 1999.1.0" in p for p in problems)
@@ -146,6 +166,9 @@ def test_a_version_bump_on_main_releases_itself() -> None:
     # A release's CI is never cancelled by a later push to main.
     ci = (wf / "ci.yml").read_text()
     assert "with:\n      release: true" in release
+    # The app store sees the new version only after the images and the release exist.
+    assert "needs: github-release" in release and "--set-store" in release
+    assert "secrets.RELEASE_DEPLOY_KEY" in release and "git push origin HEAD:main" in release
     assert "cancel-in-progress: ${{ !inputs.release }}" in ci
 
 

@@ -1,10 +1,12 @@
 name: Auto release
 
 # Merging a version bump to main publishes it. The version is the integration's
-# manifest version (check_versions makes every other copy agree). When its tag
-# already exists, nothing happens, so merges that do not bump the version release
-# nothing. A stable version without a passing hardware gate is skipped with a notice:
-# record the gate, then push the tag by hand (or re-run this workflow).
+# manifest version (check_versions makes the other release copies agree; the app
+# store's config.yaml version is set by the release itself, once the images exist).
+# When its tag already exists, nothing happens, so merges that do not bump the
+# version release nothing. A stable version without a passing hardware gate is
+# skipped with a notice: record the gate, then push the tag by hand (or re-run this
+# workflow).
 on:
   push:
     branches: [main]

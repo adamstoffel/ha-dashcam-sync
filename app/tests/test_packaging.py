@@ -43,7 +43,13 @@ def test_security_rating_is_the_maximum() -> None:
 
 
 def test_manifest_basics() -> None:
-    assert CONFIG["version"] == __version__
+    # The app store version may lag the code's until the release publishes the images
+    # (scripts/check_versions.py), but never runs ahead of it.
+    def key(v: str) -> tuple[int, ...]:
+        y, m, p, b = re.fullmatch(r"(\d{4})\.(\d+)\.(\d+)(?:b(\d+))?", v).groups()  # type: ignore[union-attr]
+        return int(y), int(m), int(p), int(b) if b else 1_000_000
+
+    assert key(CONFIG["version"]) <= key(__version__)
     assert CONFIG["slug"] == "dashcam_sync"
     assert CONFIG["arch"] == ["amd64", "aarch64"]  # armhf, armv7 and i386 now warn
     assert CONFIG["homeassistant"] == "2026.11.0"
