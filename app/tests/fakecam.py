@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -396,8 +397,9 @@ class FakeCamera:
                 for f in self.files
                 if f.url.rsplit("/", 1)[0] + "/" == path
             )
+            safe_path = html.escape(path, quote=True)
             return web.Response(
-                text=f"<html><body><h1>Index of {path}</h1>{links}</body></html>",
+                text=f"<html><body><h1>Index of {safe_path}</h1>{links}</body></html>",
                 content_type="text/html",
             )
         return web.Response(status=404)
