@@ -61,6 +61,8 @@ _LOGGER = logging.getLogger(__name__)
 
 MIN_TOKEN_LENGTH = 32
 JOIN_TIMEOUT = 45.0  # seconds to wait for Home Assistant to answer a join request
+# Seconds a join may stay "connecting": the integration checks the link for 45 s, then scans.
+JOIN_CONNECT_TIMEOUT = 120.0
 SCAN_TIMEOUT = 25.0  # seconds to wait for Home Assistant to answer a Wi-Fi scan
 
 NETWORK_POLL = 15.0
@@ -147,6 +149,10 @@ class Daemon:
         self.migration = Migration()
         # Hotspot joins asked for from the panel; Home Assistant (the integration) does them.
         self.joins: dict[str, dict[str, Any]] = {}
+        # Integrations on the push socket: socket id -> the release each one sent (None
+        # for one too old to say). Replaced, never changed in place: the status is built
+        # on a worker thread, which must never see the dict change while it reads it.
+        self.integration_links: dict[int, str | None] = {}
         # Wi-Fi scans asked of Home Assistant: the app's role may not scan itself.
         self.scans: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._runners: list[web.AppRunner] = []
@@ -588,7 +594,7 @@ class Daemon:
     def request_join(self, cam: CameraOptions) -> dict[str, Any]:
         """Ask Home Assistant to join a camera hotspot; it answers with ``set_join_result``."""
         state: dict[str, Any]
-        if self.bus.subscribers == 0:
+        if not self.integration_links:
             state = {"state": "manual", "reason": "integration_not_connected"}
         else:
             state = {"state": "requested", "reason": None}
@@ -598,7 +604,7 @@ class Daemon:
 
     async def scan_via_home_assistant(self, interface: str) -> dict[str, Any]:
         """Ask the integration to scan (Home Assistant may; this app's role may not)."""
-        if self.bus.subscribers == 0:
+        if not self.integration_links:
             return {"error": "integration_not_connected"}
         request = secrets.token_hex(6)
         future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
@@ -623,7 +629,10 @@ class Daemon:
 
     def join_status(self, cam: CameraOptions) -> dict[str, Any]:
         join = dict(self.joins.get(cam.id) or {"state": "idle", "reason": None, "ts": None})
-        if join["state"] == "requested" and time.time() - (join["ts"] or 0) > JOIN_TIMEOUT:
+        waited = time.time() - (join["ts"] or 0)
+        if (join["state"] == "requested" and waited > JOIN_TIMEOUT) or (
+            join["state"] == "connecting" and waited > JOIN_CONNECT_TIMEOUT
+        ):
             join = {"state": "manual", "reason": "no_answer", "ts": join["ts"]}
             self.joins[cam.id] = join
         worker = self.workers.get(cam.id)
@@ -948,11 +957,33 @@ class Daemon:
             "migration": self.migration.state.as_dict(),
         }
 
+    def uptime(self) -> int:
+        return round(time.time() - self._started)
+
+    def link_integration(self, key: int, version: str | None) -> None:
+        self.integration_links = {**self.integration_links, key: version}
+
+    def unlink_integration(self, key: int) -> None:
+        self.integration_links = {k: v for k, v in self.integration_links.items() if k != key}
+
+    def integration_payload(self) -> dict[str, Any]:
+        """Whether the Dashcam Sync integration is connected, and if it is the same release."""
+        links = self.integration_links  # one read: the loop may swap in a new dict meanwhile
+        connected = bool(links)
+        version = next((v for v in links.values() if v), None)
+        return {
+            "connected": connected,
+            "version": version,
+            "app_release": __version__,
+            "matches": connected and version == __version__,
+        }
+
     def status_payload(self) -> dict[str, Any]:
         return {
             "api_version": API_VERSION,
             "app_version": self.installed_version,
-            "uptime": round(time.time() - self._started),
+            "integration": self.integration_payload(),
+            "uptime": self.uptime(),
             "cameras": {cid: w.status.as_dict() for cid, w in self.workers.items()},
             "storage": self.storage_payload(),
             "issues": self.issues(),

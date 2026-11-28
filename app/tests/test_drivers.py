@@ -313,6 +313,24 @@ async def test_http_index_driver(session: aiohttp.ClientSession) -> None:
         await cam.stop()
 
 
+async def test_the_fake_index_escapes_names_like_a_real_server(
+    session: aiohttp.ClientSession,
+) -> None:
+    """A listing never carries raw markup (CodeQL alert 2), and the driver reads it back."""
+    cam = FakeCamera("index")
+    await cam.start()
+    try:
+        cam.add_index("record", "a&b<i>.mp4", 10)
+        async with session.get(f"http://{cam.host}/record/") as r:
+            page = await r.text()
+        assert "<i>" not in page and "a&amp;b&lt;i&gt;.mp4" in page
+        drv = HttpIndexDriver(CameraHttp(session))
+        assert await drv.probe(cam.host) is not None
+        assert [r.path for r in await drv.list_recordings()] == ["/record/a&b<i>.mp4"]
+    finally:
+        await cam.stop()
+
+
 async def test_detection_order_and_cache(
     session: aiohttp.ClientSession, novatek_cam: FakeCamera
 ) -> None:

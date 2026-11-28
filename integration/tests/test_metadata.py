@@ -87,6 +87,7 @@ def test_every_app_issue_has_a_translation() -> None:
     app_src = (ROOT.parent / "app/dashcam_sync/src/dashcam_sync/daemon.py").read_text()
     keys = set(re.findall(r'add\(\s*"(\w+)"', app_src)) | {
         const.ISSUE_API_MISMATCH, const.ISSUE_ANNOUNCED_ADAPTER, const.ISSUE_APP_UNREACHABLE,
+        const.ISSUE_RELEASE_MISMATCH,
     }  # fmt: skip
     assert keys <= set(STRINGS["issues"]), keys - set(STRINGS["issues"])
     for key in ("subnet_overlap", "default_route_changed", "camera_playback_mode", "storage_low"):

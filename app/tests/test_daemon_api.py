@@ -1051,6 +1051,7 @@ async def test_a_join_request_reaches_the_integration_and_its_answer_is_shown(
 ) -> None:
     await _hotspot(stack)
     events = stack.daemon.bus.subscribe()  # stands in for the integration's socket
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
     _, join = await stack.post("/api/v1/cameras/hot/join")
     assert join["state"] == "requested"
     sent = [events.get_nowait() for _ in range(events.qsize())]
@@ -1072,10 +1073,87 @@ async def test_an_unanswered_join_request_turns_manual(
 ) -> None:
     await _hotspot(stack)
     stack.daemon.bus.subscribe()
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
     await stack.post("/api/v1/cameras/hot/join")
     monkeypatch.setattr(daemon_mod, "JOIN_TIMEOUT", -1)
     _, now = await stack.get("/api/v1/cameras/hot/join")
     assert now["state"] == "manual" and now["reason"] == "no_answer"
+
+
+async def test_a_join_that_stays_connecting_turns_manual(
+    stack: Stack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The integration says it is connecting, then never gives a final answer."""
+    await _hotspot(stack)
+    stack.daemon.bus.subscribe()
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
+    await stack.post("/api/v1/cameras/hot/join")
+    status, _ = await stack.post("/api/v1/cameras/hot/join-result", {"state": "connecting"})
+    assert status == 200
+    _, now = await stack.get("/api/v1/cameras/hot/join")
+    assert now["state"] == "connecting"
+    monkeypatch.setattr(daemon_mod, "JOIN_CONNECT_TIMEOUT", -1)
+    _, now = await stack.get("/api/v1/cameras/hot/join")
+    assert now["state"] == "manual" and now["reason"] == "no_answer"
+
+
+async def test_the_panel_can_tell_whether_the_integration_is_paired(stack: Stack) -> None:
+    """Connected or not, and the same release or not: the panel warns on either."""
+    from dashcam_sync import __version__
+
+    _, info = await stack.get("/api/v1/info")
+    assert info["release"] == __version__ and isinstance(info["uptime"], int)
+    assert info["integration"] == {
+        "connected": False, "version": None, "app_release": __version__, "matches": False,
+    }  # fmt: skip
+    header = "X-Dashcam-Sync-Integration"
+    for sent, matches in ((__version__, True), ("2026.1.0", False), (None, False)):
+        headers = {**stack.h(), **({header: sent} if sent else {})}
+        async with stack.http.ws_connect(f"{stack.api}/api/v1/ws", headers=headers) as ws:
+            await ws.receive_json()  # the snapshot: the socket is registered by now
+            _, info = await stack.get("/api/v1/info")
+            assert info["integration"]["connected"] is True
+            assert info["integration"]["version"] == sent
+            assert info["integration"]["matches"] is matches
+            _, status = await stack.get("/api/v1/status")
+            assert status["integration"] == info["integration"]
+        for _ in range(100):  # the server notices the close a moment later
+            _, info = await stack.get("/api/v1/info")
+            if not info["integration"]["connected"]:
+                break
+            await asyncio.sleep(0.01)
+        assert info["integration"]["connected"] is False
+
+
+async def test_the_panels_own_feed_is_not_an_integration(stack: Stack) -> None:
+    """The ingress port serves the same socket to the browser; it cannot join anything."""
+    async with stack.http.ws_connect(f"{stack.ui}/api/v1/ws") as ws:
+        await ws.receive_json()
+        _, info = await stack.get("/api/v1/info")
+        assert info["integration"]["connected"] is False
+        await _hotspot(stack)
+        _, join = await stack.post("/api/v1/cameras/hot/join")
+        assert join["state"] == "manual" and join["reason"] == "integration_not_connected"
+
+
+async def test_a_socket_that_fails_its_first_snapshot_is_not_left_paired(
+    stack: Stack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Otherwise the panel would keep showing an integration that is gone."""
+
+    async def broken() -> dict[str, Any]:
+        raise RuntimeError("status failed")
+
+    monkeypatch.setattr(stack.daemon, "status_with_rev", broken)
+    headers = {**stack.h(), "X-Dashcam-Sync-Integration": "2026.11.0b2"}
+    async with stack.http.ws_connect(f"{stack.api}/api/v1/ws", headers=headers) as ws:
+        await ws.receive()  # the server closes it
+    for _ in range(100):
+        if not stack.daemon.integration_links:
+            break
+        await asyncio.sleep(0.01)
+    assert stack.daemon.integration_links == {}
+    assert stack.daemon.bus.subscribers == 0
 
 
 async def test_join_results_are_refused_on_the_ingress_port(stack: Stack) -> None:
@@ -1255,6 +1333,7 @@ async def test_a_scan_without_the_integration_says_why(stack: Stack) -> None:
 
 async def test_a_scan_is_answered_through_home_assistant(stack: Stack) -> None:
     events = stack.daemon.bus.subscribe()  # stands in for the integration's socket
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
 
     async def integration() -> None:
         while True:
@@ -1289,6 +1368,7 @@ async def test_an_unanswered_scan_times_out_cleanly(
     stack: Stack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     stack.daemon.bus.subscribe()
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
     monkeypatch.setattr(daemon_mod, "SCAN_TIMEOUT", 0.1)
     _, r = await stack.get("/api/v1/wizard/wifi-scan?interface=wlp4s0")
     assert r["available"] is False and r["reason"] == "no_answer"
@@ -1308,6 +1388,7 @@ async def test_scan_results_are_only_accepted_from_home_assistant(stack: Stack) 
 
 async def test_a_refused_scan_from_home_assistant_is_reported(stack: Stack) -> None:
     events = stack.daemon.bus.subscribe()
+    stack.daemon.link_integration(0, None)  # an integration is on the token port
 
     async def integration() -> None:
         while (event := await events.get())["type"] != "scan_wifi":

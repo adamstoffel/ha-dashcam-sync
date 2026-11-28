@@ -1,5 +1,5 @@
 name: Dashcam Sync
-version: "2026.11.0b1"
+version: "2026.11.0b2"
 slug: dashcam_sync
 description: Pull clips from Wi-Fi dashcams into Home Assistant, with no phone app.
 url: https://github.com/adamstoffel/ha-dashcam-sync

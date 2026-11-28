@@ -27,10 +27,21 @@ async def settle(hass: HomeAssistant, rounds: int = 50) -> None:
         await asyncio.sleep(0.01)
 
 
+@pytest.fixture(autouse=True)
+def link_comes_up():  # type: ignore[no-untyped-def]
+    """The link check itself is tested in test_wifi; here the camera's Wi-Fi just connects."""
+    with patch(
+        "custom_components.dashcam_sync.wifi.async_verify_join",
+        AsyncMock(return_value=("joined", None)),
+    ) as verify:
+        yield verify
+
+
 async def join(hass: HomeAssistant, fake_api: FakeApi) -> tuple:
+    """The final answer; a profile that was applied is first reported as connecting."""
     fake_api.push({"type": "join_wifi", "camera": "family_car"})
     await settle(hass)
-    results = fake_api.calls_named("join_result")
+    results = [r for r in fake_api.calls_named("join_result") if r[1] != "connecting"]
     assert len(results) == 1
     return results[0]
 
@@ -186,7 +197,8 @@ async def test_joins_for_one_camera_never_overlap(
         fake_api.push({"type": "join_wifi", "camera": "family_car"})
         await settle(hass)
     assert peak == 1
-    assert len(fake_api.calls_named("join_result")) == 2
+    states = [r[1] for r in fake_api.calls_named("join_result")]
+    assert states == ["connecting", "joined", "connecting", "joined"]  # one after the other
 
 
 async def test_unloading_cancels_a_running_join(

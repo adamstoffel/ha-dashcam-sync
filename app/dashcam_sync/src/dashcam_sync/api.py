@@ -31,6 +31,9 @@ from .profile import capture_profile
 from .storage import attached_storage
 from .supervisor import SupervisorError
 
+# The header the integration sends its release in (the integration's const.py has the same).
+INTEGRATION_HEADER = "X-Dashcam-Sync-Integration"
+
 if TYPE_CHECKING:
     from .daemon import Daemon
 
@@ -134,6 +137,9 @@ async def info(request: web.Request) -> web.Response:
         {
             "api_version": API_VERSION,
             "app_version": d.installed_version,
+            "release": __version__,
+            "uptime": d.uptime(),
+            "integration": d.integration_payload(),
             "name": "Dashcam Sync",
             "instance": d.instance_id,
             "cameras": len(d.workers),
@@ -150,26 +156,35 @@ async def websocket(request: web.Request) -> web.StreamResponse:
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
     request.app[SOCKETS].add(ws)
+    # On the token port this is the integration, and it says which release it is. The
+    # ingress port serves the same feed to the panel's browser: that is not an integration.
+    if request.app[SECRETS]:
+        d.link_integration(id(ws), request.headers.get(INTEGRATION_HEADER, "")[:40] or None)
     queue = d.bus.subscribe()
-    await ws.send_json({"type": "snapshot", **await d.status_with_rev()})
+    task: asyncio.Task[None] | None = None
 
     async def pump() -> None:
         while True:
             event = await queue.get()
             await ws.send_json(event)
 
-    task = asyncio.create_task(pump())
+    # Everything after registering is inside the try: a client gone while the first
+    # snapshot is sent must not stay counted as a connected integration.
     try:
+        await ws.send_json({"type": "snapshot", **await d.status_with_rev()})
+        task = asyncio.create_task(pump())
         async for msg in ws:
             if msg.type == aiohttp.WSMsgType.TEXT and msg.data == "snapshot":
                 await ws.send_json({"type": "snapshot", **await d.status_with_rev()})
             elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSE):
                 break
     finally:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
         d.bus.unsubscribe(queue)
+        d.unlink_integration(id(ws))
         request.app[SOCKETS].discard(ws)
     return ws
 
@@ -738,7 +753,7 @@ async def wizard_storage_test(request: web.Request) -> web.Response:
     )
 
 
-JOIN_STATES = ("joined", "failed", "manual")
+JOIN_STATES = ("connecting", "joined", "failed", "manual")
 
 
 async def wizard_interfaces(request: web.Request) -> web.Response:

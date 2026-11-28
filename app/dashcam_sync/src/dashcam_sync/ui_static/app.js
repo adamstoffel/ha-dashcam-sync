@@ -102,8 +102,9 @@ function confirmDialog(title, text, okLabel = "OK", danger = false) {
   return new Promise((resolve) => {
     const d = openDialog(title, { small: true, id: "confirm" });
     let answer = false;
-    d.body.innerHTML = `<div>${text}</div><div class="actions end"><button class="text" id="c-no">Cancel</button>
+    d.body.innerHTML = `<div class="c-text"></div><div class="actions end"><button class="text" id="c-no">Cancel</button>
       <button class="${danger ? "primary danger-fill" : "primary"}" id="c-yes">${esc(okLabel)}</button></div>`;
+    $(".c-text", d.body).textContent = text;  // plain text: never parsed as HTML
     if (danger) $("#c-yes", d.dlg).style.background = $("#c-yes", d.dlg).style.borderColor = "var(--bad)";
     $("#c-no", d.dlg).onclick = d.close;
     $("#c-yes", d.dlg).onclick = () => { answer = true; d.close(); };
@@ -164,6 +165,26 @@ const ISSUES = {
   storage_low: "A storage target is below its minimum free space.",
 };
 const STATUS_TEXT = { idle: "idle", detecting: "detecting", preparing: "preparing", listing: "listing files", downloading: "downloading", restoring: "restoring recording", error: "error" };
+
+// ------------------------------------------------------------------ pairing
+
+// The app and the integration are released together. Joining camera Wi-Fi, entities and
+// clips in Media all need the integration connected, and on the same release.
+const pairingProblem = (p) => {
+  if (!p) return "";  // an app too old to tell: nothing to say
+  const setup = `<a href="/config/integrations/integration/dashcam_sync" target="_top">Settings › Devices &amp; services</a>`;
+  if (!p.connected) return `<b>The Dashcam Sync integration is not connected.</b> Home Assistant cannot join camera Wi-Fi, and has no Dashcam Sync entities or clips in Media, until it is. Add it under ${setup} (a discovered Dashcam Sync is usually waiting there), or install it from HACS first.`;
+  if (!p.matches) return `<b>The app and the integration are different releases.</b> App ${esc(p.app_release)}, integration ${p.version ? esc(p.version) : "older than 2026.11.0b2"}. Update the integration in HACS and the app under <a href="/config/apps" target="_top">Settings › Apps</a> to the same release, then restart Home Assistant.`;
+  return "";
+};
+async function checkPairing() {
+  const el = $("#pairing");
+  const info = await api("info").catch(() => null);
+  // Just after the app starts, the integration takes a moment to reconnect.
+  const problem = info && info.uptime > 60 ? pairingProblem(info.integration) : "";
+  el.hidden = !problem;
+  el.innerHTML = problem ? `<div class="card notice bad">${problem}</div>` : "";
+}
 
 // ------------------------------------------------------------------ routing
 
@@ -259,7 +280,10 @@ const SCAN_REASONS = {
 };
 const JOIN_REASONS = {
   integration_not_connected: "The Dashcam Sync integration is not connected to this app, so Home Assistant cannot be asked to join.",
-  no_answer: "Home Assistant did not answer the join request.",
+  no_answer: "Home Assistant did not answer the join request. If the integration was just updated, restart Home Assistant.",
+  wrong_password: "Home Assistant sees the camera's Wi-Fi but could not connect to it. The Wi-Fi password is most likely wrong.",
+  not_in_range: "Home Assistant cannot see the camera's Wi-Fi. Is the camera on, and the car within range? Check the SSID too.",
+  not_connected: "Home Assistant could not connect to the camera's Wi-Fi.",
   device_in_block: "A device on your network uses an address in the camera's reserved block. Run Network check on the camera for details.",
   address_in_use: "Home Assistant's address on the camera network is already used on your network. Run Network check for details.",
   camera_collides: "Something on your network has the camera's address. See Overlapping addresses in the documentation.",
@@ -562,7 +586,8 @@ async function wizard(existing) {
     }
     if (st.step === 3) {
       if (!st.name) return err("Give the camera a name.");
-      const body = { id: edit ? st.id : slug(st.name), name: st.name, connection: st.connection, driver: st.driver, enabled: existing ? existing.enabled : true };
+      // Once saved (a step back to fix the password, say), the camera keeps its id.
+      const body = { id: edit || st.id ? st.id : slug(st.name), name: st.name, connection: st.connection, driver: st.driver, enabled: existing ? existing.enabled : true };
       if (existing?.sync_mode) body.sync_mode = existing.sync_mode;
       if (st.host) body.host = st.host;
       // Always static: a DHCP profile from the camera would also take its gateway and DNS.
@@ -620,9 +645,15 @@ async function wizard(existing) {
             <li>You can close this; the camera is picked up whenever it is in range.</li></ul></div>` : "";
       const waiting = `<p class="muted"><span class="spinner"></span> Waiting for the camera to answer…</p>`;
       let html = "";
-      if (j.state === "requested") html = `<p class="muted"><span class="spinner"></span> Asking Home Assistant to join <b>${esc(j.profile.ssid)}</b> on ${esc(j.profile.interface)}…</p>`;
+      if (j.state === "connecting") html = `<p class="muted"><span class="spinner"></span> Connecting to <b>${esc(j.profile.ssid)}</b> on ${esc(j.profile.interface)}…</p>`;
+      else if (j.state === "requested") html = `<p class="muted"><span class="spinner"></span> Asking Home Assistant to join <b>${esc(j.profile.ssid)}</b> on ${esc(j.profile.interface)}…</p>`;
       else if (j.state === "joined") html = `<p><span class="badge ok">joined</span> Home Assistant joined <b>${esc(j.profile.ssid)}</b>.</p>${waiting}${ifState}${slow}`;
-      else if (j.state === "failed") html = `<div class="card notice bad"><b>Could not join.</b> ${joinReason(j.reason)}</div><div class="actions"><button id="w-retry">Try again</button></div>${manual(j.profile)}`;
+      else if (j.state === "failed") {
+        // A wrong password or a camera out of range is fixed here, not by typing the profile by hand.
+        const fixable = ["wrong_password", "not_in_range"].includes(j.reason);
+        html = `<div class="card notice bad"><b>Could not join.</b> ${joinReason(j.reason)}</div>
+          <div class="actions">${fixable ? `<button id="w-back">${j.reason === "wrong_password" ? "Change the password" : "Check the SSID"}</button>` : ""}<button id="w-retry">Try again</button></div>${fixable ? "" : manual(j.profile)}`;
+      }
       else if (j.state === "manual") html = manual(j.profile, joinReason(j.reason)) + waiting + ifState + slow;
       if (j.camera_connected) {
         const det = await detect(st.host || j.profile.camera || "");
@@ -632,10 +663,52 @@ async function wizard(existing) {
       $$("button.copy", out).forEach((b) => { b.onclick = () => { navigator.clipboard?.writeText(b.dataset.v); toast("Copied"); }; });
       $("#w-later", out).onclick = d.close;
       if ($("#w-retry", out)) $("#w-retry", out).onclick = async () => { await api(`cameras/${st.id}/join`, { method: "POST" }); poll(); };
+      if ($("#w-back", out)) $("#w-back", out).onclick = () => { clearInterval(poller); st.password = ""; st.step = 2; draw(); };
     };
-    try { await api(`cameras/${st.id}/join`, { method: "POST" }); } catch (e) { out.innerHTML = `<div class="card notice bad">${esc(e.message)}</div>`; return; }
-    await poll();
-    poller = setInterval(poll, 2000);
+    // Each pairing check, and the join itself, takes a new phase. A request that answers
+    // after the phase moved on (a newer check, the join started, the wizard closed) is
+    // dropped, so it cannot start a second join or replace the running timer.
+    let phase = 0, joining = false;
+    const current = (mine) => mine === phase && d.dlg.open;
+    const start = async () => {
+      if (joining || !d.dlg.open) return;
+      joining = true;
+      phase += 1;
+      clearInterval(poller);  // the pairing check's own poll, when started from it
+      try { await api(`cameras/${st.id}/join`, { method: "POST" }); } catch (e) {
+        joining = false;
+        out.innerHTML = `<div class="card notice bad">${esc(e.message)}</div>`; return;
+      }
+      if (!d.dlg.open) return;
+      await poll();
+      if (d.dlg.open) poller = setInterval(poll, 2000);
+    };
+    // Joining goes through the integration: without it (or with another release of it)
+    // the request is never answered, so say so up front instead of waiting for nothing.
+    const gate = async () => {
+      if (joining) return;
+      const mine = ++phase;
+      clearInterval(poller);
+      const info = await api("info").catch(() => null);
+      if (!current(mine)) return;
+      const problem = info && pairingProblem(info.integration);
+      if (!problem) return start();
+      const j = await api(`cameras/${st.id}/join`).catch(() => null);
+      if (!current(mine)) return;
+      out.innerHTML = `<div class="card notice bad">${problem}</div>
+        <div class="actions"><button id="w-recheck" class="primary">Check again</button>${info.integration.connected ? `<button id="w-anyway">Continue anyway</button>` : ""}<button class="text" id="w-later">Close, finish later</button></div>
+        ${j?.profile ? `<details><summary>Join the camera's Wi-Fi by hand instead</summary>${manual(j.profile)}</details>` : ""}`;
+      $("#w-recheck", out).onclick = gate;
+      $("#w-later", out).onclick = d.close;
+      if ($("#w-anyway", out)) $("#w-anyway", out).onclick = start;
+      $$("button.copy", out).forEach((b) => { b.onclick = () => { navigator.clipboard?.writeText(b.dataset.v); toast("Copied"); }; });
+      // Poll while the user fixes it elsewhere, and carry on by itself once it is fixed.
+      poller = setInterval(async () => {
+        const again = await api("info").catch(() => null);
+        if (current(mine) && again && !pairingProblem(again.integration)) start();
+      }, 5000);
+    };
+    await gate();
   };
 
   draw();
@@ -893,4 +966,6 @@ async function logs() {
 
 inheritTheme();
 api("info").then((i) => { $("#version").textContent = `Dashcam Sync ${i.app_version}`; }).catch(() => {});
+checkPairing();
+setInterval(checkPairing, 15000);
 render();

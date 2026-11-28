@@ -17,6 +17,7 @@ from custom_components.dashcam_sync.api import (
     DashcamSyncConnectionError,
     DashcamSyncRequestError,
 )
+from custom_components.dashcam_sync.const import INTEGRATION_HEADER
 
 pytestmark = pytest.mark.usefixtures("socket_enabled")  # real localhost sockets
 
@@ -38,7 +39,9 @@ async def server() -> AsyncIterator[tuple[TestServer, list[tuple[str, str, Any]]
         seen.append((request.method, request.path_qs, body))
         path = request.path
         if path.endswith("/info"):
-            return web.json_response({"api_version": 1})
+            return web.json_response(
+                {"api_version": 1, "integration": request.headers.get(INTEGRATION_HEADER)}
+            )
         if path.endswith("/status"):
             return web.json_response({"cameras": {}})
         if path.endswith("/clips"):
@@ -58,6 +61,7 @@ async def server() -> AsyncIterator[tuple[TestServer, list[tuple[str, str, Any]]
     async def ws(request: web.Request) -> web.StreamResponse:
         sock = web.WebSocketResponse()
         await sock.prepare(request)
+        seen.append(("WS", request.path, request.headers.get(INTEGRATION_HEADER)))
         await sock.send_json({"type": "snapshot"})
         await sock.send_str("not-json-object")  # ignored: not a JSON object
         await sock.send_json(["list"])
@@ -162,3 +166,18 @@ async def test_websocket_errors(server: tuple[TestServer, list[tuple[str, str, A
         with pytest.raises(DashcamSyncConnectionError):
             async for _ in DashcamSyncApi(session, "127.0.0.1", 1, TOKEN).async_messages():
                 pass
+
+
+async def test_the_integration_says_which_release_it_is(
+    server: tuple[TestServer, list[tuple[str, str, Any]]],
+) -> None:
+    """The app's panel shows whether the integration is connected, and the same release."""
+    srv, seen = server
+    async with aiohttp.ClientSession() as session:
+        named = DashcamSyncApi(session, "127.0.0.1", srv.port, TOKEN, "2026.11.0b2")
+        assert (await named.async_info())["integration"] == "2026.11.0b2"
+        async for _message in named.async_messages():
+            break
+        assert ("WS", "/api/v1/ws", "2026.11.0b2") in seen  # the push socket says it too
+        unnamed = DashcamSyncApi(session, "127.0.0.1", srv.port, TOKEN)
+        assert (await unnamed.async_info())["integration"] is None

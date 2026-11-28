@@ -15,6 +15,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.loader import async_get_integration
 
 from .api import (
     DashcamSyncApi,
@@ -31,6 +32,7 @@ from .const import (
     DOMAIN,
     ISSUE_ANNOUNCED_ADAPTER,
     ISSUE_API_MISMATCH,
+    ISSUE_RELEASE_MISMATCH,
     MIN_API_VERSION,
 )
 from .coordinator import DashcamSyncConfigEntry, DashcamSyncCoordinator, DashcamSyncRuntimeData
@@ -72,11 +74,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry) -> bool:
+    integration_version = str((await async_get_integration(hass, DOMAIN)).version or "")
     api = DashcamSyncApi(
         async_get_clientsession(hass),
         entry.data[CONF_HOST],
         entry.data[CONF_PORT],
         entry.data[CONF_TOKEN],
+        integration_version or None,
     )
     try:
         info = await api.async_info()
@@ -111,6 +115,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: DashcamSyncConfigEntry) 
         app_api=str(app_api),
         integration_api=str(API_VERSION),
     )
+
+    # The app and the integration are released together; a different release on either
+    # side is the usual cause of a feature that "does nothing" (an older app, say, that
+    # never answers a request this integration sends).
+    @callback
+    def _check_release() -> None:
+        # Again on every update: an app restarted on another release reconnects the push
+        # socket without setting this entry up again. An app too old to report its release
+        # (no ``integration`` in its status) counts as a different release.
+        pairing = coordinator.hub.get("integration")
+        app_release = pairing.get("app_release") if isinstance(pairing, dict) else None
+        issues.async_set_own(
+            ISSUE_RELEASE_MISMATCH,
+            bool(integration_version) and app_release != integration_version,
+            app_release=str(app_release or "older than 2026.11.0b2"),
+            integration_release=integration_version,
+        )
+
+    _check_release()
+    entry.async_on_unload(coordinator.async_add_listener(_check_release))
     announced = await async_announced_wifi_adapters(hass)
     issues.async_set_own(ISSUE_ANNOUNCED_ADAPTER, bool(announced), adapters=", ".join(announced))
 
