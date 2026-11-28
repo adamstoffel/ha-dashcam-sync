@@ -146,11 +146,16 @@ class DashcamSyncConfigFlow(ConfigFlow, domain=DOMAIN):
             # The card may be old: the app restarted or was reinstalled since, and that
             # token is gone. Check again rather than create an entry that cannot connect.
             d = self._discovered
-            info, _error = await _validate(self, d[CONF_HOST], d[CONF_PORT], d[CONF_TOKEN])
+            info, error = await _validate(self, d[CONF_HOST], d[CONF_PORT], d[CONF_TOKEN])
+            # Outdated only when the app says so: the token was rejected, or another
+            # instance answers. Any other failure keeps its own reason (the app is down,
+            # the versions differ) instead of advice that does not apply.
+            if error == "invalid_auth" or (
+                info is not None and info.get("instance") != self.unique_id
+            ):
+                return self.async_abort(reason="discovery_outdated")
             if info is None:
-                return self.async_abort(reason="discovery_outdated")
-            if info.get("instance") != self.unique_id:
-                return self.async_abort(reason="discovery_outdated")
+                return self.async_abort(reason=error or "unknown")
             return self.async_create_entry(title="Dashcam Sync", data=self._discovered)
         return self.async_show_form(
             step_id="hassio_confirm",

@@ -148,9 +148,17 @@ async def test_a_reinstalled_app_replaces_its_old_discovery_card(
     assert len(hass.config_entries.flow.async_progress_by_handler(DOMAIN)) == 2
 
 
-@pytest.mark.parametrize("change", ["token_gone", "other_instance"])
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ("token_gone", "discovery_outdated"),
+        ("other_instance", "discovery_outdated"),
+        ("app_down", "cannot_connect"),  # not outdated: the app is just not answering
+        ("other_api", "incompatible_api"),
+    ],
+)
 async def test_an_outdated_card_creates_no_entry(
-    hass: HomeAssistant, fake_api: FakeApi, change: str
+    hass: HomeAssistant, fake_api: FakeApi, change: str, reason: str
 ) -> None:
     """Confirming checks the app again: an entry that cannot connect is never created."""
     result = await hass.config_entries.flow.async_init(
@@ -158,10 +166,14 @@ async def test_an_outdated_card_creates_no_entry(
     )
     if change == "token_gone":
         fake_api.error = DashcamSyncAuthError("token rotated")
-    else:
+    elif change == "other_instance":
         fake_api.info["instance"] = "inst-reinstalled"
+    elif change == "app_down":
+        fake_api.error = DashcamSyncConnectionError("timeout")
+    else:
+        fake_api.info["api_version"] = 99
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    assert result["type"] is FlowResultType.ABORT and result["reason"] == "discovery_outdated"
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == reason
     assert not hass.config_entries.async_entries(DOMAIN)
 
 
