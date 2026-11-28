@@ -4,6 +4,8 @@ All notable changes to the integration and the app. Both are released together w
 
 ## Unreleased
 
+- Fixed: when the Supervisor itself reports that the camera's Wi-Fi did not come up ("Activating connection failed"), the wizard now says whether the camera refused the password or is out of range, as it does when the link fails later, instead of showing the steps to join by hand.
+- The camera's Wi-Fi password can be shown while typing it in the wizard (**Show**).
 - Releases are automatic: merging a version bump to `main` runs the release (CI, signed images, GitHub release and tag), and its last step sets the app's `config.yaml` version on `main`. Home Assistant offered 2026.11.0b2 while its images were still being built, so updating failed with "not found"; the app store now sees a new version only once its images exist. See CONTRIBUTING, *Branches and releases*.
 - Fixed: after the app was reinstalled, Home Assistant showed two discovered *Dashcam Sync* cards, one from the earlier install whose token no longer works. A new announcement from the app now closes its earlier card, and **Add** checks the app again before creating the entry, so an outdated card can never set up an entry that cannot connect.
 

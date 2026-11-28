@@ -31,6 +31,15 @@ class WifiUnavailable(HomeAssistantError):
     """Wi-Fi cannot be managed from here: use the manual steps."""
 
 
+class WifiLinkFailed(WifiUnavailable):
+    """The Supervisor took the profile but the link did not come up (it said so itself)."""
+
+
+# The Supervisor waits for NetworkManager to activate the profile and, when that
+# fails (a wrong passphrase, the camera out of range), answers with this error.
+ACTIVATION_FAILED = "activating connection failed"
+
+
 @dataclass(frozen=True, slots=True)
 class WifiInterface:
     name: str
@@ -186,6 +195,8 @@ async def async_apply_profile(hass: HomeAssistant, profile: WifiProfile) -> None
     try:
         await _post_interface_update(client, profile.interface, config)
     except Exception as err:
+        if ACTIVATION_FAILED in str(err).lower():
+            raise WifiLinkFailed(str(err)) from err
         raise WifiUnavailable(f"the Supervisor refused the Wi-Fi profile: {err}") from err
 
 
@@ -293,6 +304,9 @@ async def async_join_camera(
         return "failed", f"no_adapter: {profile.interface}"
     try:
         await async_apply_profile(hass, profile)
+    except WifiLinkFailed:
+        # The profile was fine and the link failed: say why, as when it fails later.
+        return await async_why_not_joined(hass, profile)
     except WifiUnavailable as err:
         return "manual", str(err)
     try:
@@ -331,6 +345,11 @@ async def async_verify_join(
             _LOGGER.debug("Could not read the interface state: %s", err)
         if time.monotonic() >= deadline:
             break
+    return await async_why_not_joined(hass, profile)
+
+
+async def async_why_not_joined(hass: HomeAssistant, profile: WifiProfile) -> tuple[str, str]:
+    """The link never came up: the camera's network in range means the passphrase."""
     try:
         visible = {ap.get("ssid") for ap in await async_scan_access_points(hass, profile.interface)}
     except WifiUnavailable:

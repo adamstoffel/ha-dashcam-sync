@@ -221,3 +221,24 @@ async def test_unloading_cancels_a_running_join(
         assert await hass.config_entries.async_unload(loaded.entry_id)
         await settle(hass)
     assert fake_api.calls_named("join_result") == []
+
+
+@pytest.mark.parametrize(
+    ("visible", "reason"), [(["CAMWIFI"], "wrong_password"), (["HOME"], "not_in_range")]
+)
+async def test_a_link_the_supervisor_could_not_activate_says_why(
+    hass: HomeAssistant, loaded: MockConfigEntry, fake_api: FakeApi, visible: list, reason: str
+) -> None:
+    """Not the "join it by hand" steps: the profile was fine, the camera refused it."""
+    from custom_components.dashcam_sync.wifi import WifiLinkFailed
+
+    aps = [{"ssid": s} for s in visible]
+    with (
+        patch(f"{W}.async_list_wifi_interfaces", return_value=ADAPTER),
+        patch(
+            f"{W}.async_apply_profile",
+            AsyncMock(side_effect=WifiLinkFailed("Activating connection failed")),
+        ),
+        patch(f"{W}.async_scan_access_points", AsyncMock(return_value=aps)),
+    ):
+        assert await join(hass, fake_api) == ("family_car", "failed", reason)
