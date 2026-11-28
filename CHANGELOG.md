@@ -2,6 +2,10 @@
 
 All notable changes to the integration and the app. Both are released together with the same CalVer version (`YYYY.M.patch`).
 
+## Unreleased
+
+- Releases are automatic: merging a version bump to `main` runs the release (CI, signed images, GitHub release and tag). See CONTRIBUTING, *Branches and releases*.
+
 ## 2026.11.0b2
 
 - Fixed: a camera with a wrong Wi-Fi password looked like it was still being joined ("Waiting for the camera to answer…"). The Supervisor takes a profile before the host tries it, so the integration now waits for the interface to come up on the camera's network before reporting it joined. If it does not, it scans: the network in range means the password is wrong, otherwise the camera is out of range. The wizard says which, and offers **Change the password** or **Check the SSID**.

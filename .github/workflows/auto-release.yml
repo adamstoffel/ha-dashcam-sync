@@ -1,0 +1,59 @@
+name: Auto release
+
+# Merging a version bump to main publishes it. The version is the integration's
+# manifest version (check_versions makes every other copy agree). When its tag
+# already exists, nothing happens, so merges that do not bump the version release
+# nothing. A stable version without a passing hardware gate is skipped with a notice:
+# record the gate, then push the tag by hand (or re-run this workflow).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - id: plan
+        run: |
+          version="$(python -c 'import json;print(json.load(open("custom_components/dashcam_sync/manifest.json"))["version"])')"
+          tag="v${version}"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null; then
+            echo "::notice::${tag} is already released; nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python scripts/check_versions.py "${tag}"
+          if ! python scripts/check_hardware_gate.py "${tag}"; then
+            echo "::warning::${tag} is a stable version without a passing hardware gate; not released. Record docs/hardware-gate/${version}.md, then push the tag."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::notice::Releasing ${tag}."
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+  release:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+    permissions:
+      contents: write
+      packages: write
+      id-token: write

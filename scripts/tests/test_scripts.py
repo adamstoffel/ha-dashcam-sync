@@ -126,6 +126,20 @@ def test_ci_runs_on_main_and_pull_requests() -> None:
     assert "push:\n    branches: [main]" in ci and "pull_request:" in ci
 
 
+def test_a_version_bump_on_main_releases_itself() -> None:
+    """auto-release.yml decides; release.yml does the work, for a tag or when called."""
+    wf = SCRIPTS.parent / ".github/workflows"
+    auto, release = (wf / "auto-release.yml").read_text(), (wf / "release.yml").read_text()
+    assert "push:\n    branches: [main]" in auto
+    assert "git ls-remote --exit-code --tags origin" in auto  # an existing tag: nothing to do
+    assert "check_versions.py" in auto and "check_hardware_gate.py" in auto
+    assert "uses: ./.github/workflows/release.yml" in auto and "tag: ${{ needs.plan.outputs.tag }}" in auto
+    assert 'tags: ["v*"]' in release and "workflow_call:" in release  # by hand or called
+    assert "TAG: ${{ inputs.tag || github.ref_name }}" in release
+    assert "tag_name: ${{ env.TAG }}" in release  # the release creates the tag last
+    assert "github.ref_name" not in release.replace("inputs.tag || github.ref_name", "")
+
+
 def _fake_ha(tmp_path: Path) -> Path:
     """A tiny stand-in for the homeassistant package, using Python 3.14's bare ``except A, B``."""
     pkg = tmp_path / "ha" / "homeassistant" / "helpers"
