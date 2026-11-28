@@ -664,20 +664,36 @@ async function wizard(existing) {
       if ($("#w-retry", out)) $("#w-retry", out).onclick = async () => { await api(`cameras/${st.id}/join`, { method: "POST" }); poll(); };
       if ($("#w-back", out)) $("#w-back", out).onclick = () => { clearInterval(poller); st.password = ""; st.step = 2; draw(); };
     };
+    // Each pairing check, and the join itself, takes a new phase. A request that answers
+    // after the phase moved on (a newer check, the join started, the wizard closed) is
+    // dropped, so it cannot start a second join or replace the running timer.
+    let phase = 0, joining = false;
+    const current = (mine) => mine === phase && d.dlg.open;
     const start = async () => {
+      if (joining || !d.dlg.open) return;
+      joining = true;
+      phase += 1;
       clearInterval(poller);  // the pairing check's own poll, when started from it
-      if (!d.dlg.open) return;  // a pairing answer that arrived after the wizard closed
-      try { await api(`cameras/${st.id}/join`, { method: "POST" }); } catch (e) { out.innerHTML = `<div class="card notice bad">${esc(e.message)}</div>`; return; }
+      try { await api(`cameras/${st.id}/join`, { method: "POST" }); } catch (e) {
+        joining = false;
+        out.innerHTML = `<div class="card notice bad">${esc(e.message)}</div>`; return;
+      }
+      if (!d.dlg.open) return;
       await poll();
-      poller = setInterval(poll, 2000);
+      if (d.dlg.open) poller = setInterval(poll, 2000);
     };
     // Joining goes through the integration: without it (or with another release of it)
     // the request is never answered, so say so up front instead of waiting for nothing.
     const gate = async () => {
+      if (joining) return;
+      const mine = ++phase;
+      clearInterval(poller);
       const info = await api("info").catch(() => null);
+      if (!current(mine)) return;
       const problem = info && pairingProblem(info.integration);
       if (!problem) return start();
       const j = await api(`cameras/${st.id}/join`).catch(() => null);
+      if (!current(mine)) return;
       out.innerHTML = `<div class="card notice bad">${problem}</div>
         <div class="actions"><button id="w-recheck" class="primary">Check again</button>${info.integration.connected ? `<button id="w-anyway">Continue anyway</button>` : ""}<button class="text" id="w-later">Close, finish later</button></div>
         ${j?.profile ? `<details><summary>Join the camera's Wi-Fi by hand instead</summary>${manual(j.profile)}</details>` : ""}`;
@@ -686,10 +702,9 @@ async function wizard(existing) {
       if ($("#w-anyway", out)) $("#w-anyway", out).onclick = start;
       $$("button.copy", out).forEach((b) => { b.onclick = () => { navigator.clipboard?.writeText(b.dataset.v); toast("Copied"); }; });
       // Poll while the user fixes it elsewhere, and carry on by itself once it is fixed.
-      clearInterval(poller);
       poller = setInterval(async () => {
         const again = await api("info").catch(() => null);
-        if (again && !pairingProblem(again.integration)) { clearInterval(poller); start(); }
+        if (current(mine) && again && !pairingProblem(again.integration)) start();
       }, 5000);
     };
     await gate();
